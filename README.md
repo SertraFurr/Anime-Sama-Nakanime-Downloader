@@ -8,7 +8,7 @@
  
 **A powerful, beautiful and simple CLI tool to download anime episodes from Anime-Sama & Nakanime. (More coming)**
 
-(✨52 STARS✨! Thanks!) 
+(✨53 STARS✨! Thanks!) 
 
 *Questions? Unworking URLs? Open an issue, will be added fastly (hopefully)*
 

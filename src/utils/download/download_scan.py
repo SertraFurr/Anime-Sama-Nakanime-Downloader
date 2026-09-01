@@ -1,10 +1,27 @@
 import requests
 import json
 import re
+import shutil
+import zipfile
 from src.var import Colors, print_status, print_separator, get_domain
 from src.utils.extract.extract_anime_name import extract_anime_name
 import os
 from tqdm import tqdm
+
+
+def package_chapter_as_cbz(chap_dir, cbz_path):
+    pages = sorted(
+        (f for f in os.listdir(chap_dir) if os.path.isfile(os.path.join(chap_dir, f))),
+        key=lambda f: (float(os.path.splitext(f)[0]) if os.path.splitext(f)[0].replace('.', '', 1).isdigit() else os.path.splitext(f)[0])
+    )
+    if not pages:
+        return False
+
+    with zipfile.ZipFile(cbz_path, 'w', zipfile.ZIP_STORED) as cbz:
+        for page in pages:
+            cbz.write(os.path.join(chap_dir, page), arcname=page)
+
+    return True
 
 def download_scan(url, headers):
     try:
@@ -157,6 +174,9 @@ def download_scan(url, headers):
         if not selected_chapters:
             return
 
+        cbz_choice = input(f"{Colors.BOLD}Package chapters as .cbz? (y/n): {Colors.ENDC}").strip().lower()
+        package_as_cbz = cbz_choice in ['y', 'yes', '1']
+
         base_scan_url = url.rstrip('/')
         local_name = anime_name
         local_name = re.sub(r'[<>:"/\\|?*]', '', local_name)
@@ -217,6 +237,17 @@ def download_scan(url, headers):
                 print_status(f"Chapter {chap} completed ({success_count}/{page_count})", "success")
             else:
                 print_status(f"Chapter {chap} partial ({success_count}/{page_count})", "warning")
+
+            if package_as_cbz:
+                cbz_path = os.path.join(save_base_dir, f"Chapter {safe_chap}.cbz")
+                try:
+                    if package_chapter_as_cbz(chap_dir, cbz_path):
+                        shutil.rmtree(chap_dir)
+                        print_status(f"Chapter {chap} packaged as {os.path.basename(cbz_path)}", "success")
+                    else:
+                        print_status(f"Chapter {chap}: no pages to package into .cbz", "warning")
+                except Exception as e:
+                    print_status(f"Failed to package chapter {chap} as .cbz: {e}", "error")
 
     except requests.RequestException as e:
         print_status(f"Network error: {e}", "error")

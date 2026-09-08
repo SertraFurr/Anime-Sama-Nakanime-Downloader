@@ -345,9 +345,17 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     try:
         if use_threading and len(episode_indices) > 1:
             print_status("Starting threaded downloads...", "info")
+            # Once inside a threaded batch, no per-episode question should
+            # ever hit the terminal again - the batch-level choices already
+            # made (use_ts_threading, automatic_mp4) cover it, and letting
+            # download_video() fall back to an interactive input() per file
+            # means multiple threads race to read stdin at once (this was
+            # producing the repeated, garbled "Threaded Download Option"
+            # prompts interleaved with progress bars). Forcing
+            # interactive=False here makes it silently default instead.
             with ThreadPoolExecutor() as executor:
                 future_to_episode = {
-                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, interactive): ep_num
+                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False): ep_num
                     for ep_num, ep_idx, video_src in zip(episode_numbers, episode_indices, video_sources)
                 }
                 for future in as_completed(future_to_episode):

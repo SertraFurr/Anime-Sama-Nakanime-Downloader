@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+import threading
 from urllib.parse import urlparse
 import time
 from tqdm import tqdm
@@ -8,6 +9,29 @@ from concurrent.futures                 import ThreadPoolExecutor, as_completed
 
 from src.var                            import Colors, print_status, DEFAULT_USER_AGENT
 from src.utils.parse.parse_ts_segments  import parse_ts_segments
+
+# Assigns each concurrent episode download its own terminal line (tqdm's
+# `position`) instead of letting them all draw over line 0 - without this,
+# several episodes downloading in parallel (batch threaded mode) produce a
+# garbled, overlapping progress display. Positions are released and reused
+# once a download finishes instead of growing unbounded.
+_position_lock = threading.Lock()
+_positions_in_use = set()
+
+
+class _TqdmPosition:
+    def __enter__(self):
+        with _position_lock:
+            pos = 0
+            while pos in _positions_in_use:
+                pos += 1
+            _positions_in_use.add(pos)
+            self.pos = pos
+        return self.pos
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with _position_lock:
+            _positions_in_use.discard(self.pos)
 
 def download_video(video_url, save_path, use_ts_threading=False, url='',automatic_mp4=False, threaded_mp4=False, interactive=True):
     print_status(f"Starting download: {os.path.basename(save_path)}", "loading")
@@ -50,6 +74,8 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
         headers.pop('Origin', None)
         headers.pop('Accept-Language', None)
 
+    position_ctx = _TqdmPosition()
+    tqdm_position = position_ctx.__enter__()
     try:
         if 'm3u8' in video_url:
             from urllib.parse import urljoin
@@ -141,7 +167,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
 
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     future_to_segment = {executor.submit(download_segment, url, i): i for i, url in enumerate(segments)}
-                    with tqdm(total=len(segments), desc=f"📥 {random_string}", unit="segment") as pbar:
+                    with tqdm(total=len(segments), desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False) as pbar:
                         for future in as_completed(future_to_segment):
                             index, content = future.result()
                             if content is None:
@@ -157,7 +183,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                         f.write(content)
             else:
                 with open(temp_ts_path, 'wb') as f:
-                    for i, segment_url in enumerate(tqdm(segments, desc=f"📥 {random_string}", unit="segment")):
+                    for i, segment_url in enumerate(tqdm(segments, desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False)):
                         for attempt in range(3):
                             try:
                                 seg_response = requests.get(segment_url, headers=headers, stream=True, timeout=10)
@@ -185,11 +211,13 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
             
             with open(save_path, 'wb') as f:
                 with tqdm(
-                    total=total_size, 
-                    unit='B', 
-                    unit_scale=True, 
+                    total=total_size,
+                    unit='B',
+                    unit_scale=True,
                     desc=f"📥 {os.path.basename(save_path)}",
-                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                    position=tqdm_position,
+                    leave=False
                 ) as pbar:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if chunk:
@@ -201,3 +229,5 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
     except Exception as e:
         print_status(f"Download failed: {str(e)}", "error")
         return False, None
+    finally:
+        position_ctx.__exit__(None, None, None)

@@ -145,7 +145,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                     search_domains.append(target)
 
                 for p in avail:
-                    urls_to_check = episodes[p][:5]
+                    urls_to_check = [u for u in episodes[p][:5] if u]
                     found_match = False
                     for u in urls_to_check:
                         u_lower = u.lower()
@@ -184,7 +184,8 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
             if args.episodes.lower() == 'all':
                 episode_indices = []
                 for i in range(len(episodes[player_choice])):
-                    if 'vk.com' not in episodes[player_choice][i] and 'myvi.tv' not in episodes[player_choice][i]:
+                    url = episodes[player_choice][i]
+                    if url and 'vk.com' not in url and 'myvi.tv' not in url:
                         episode_indices.append(i)
             else:
                 try:
@@ -224,6 +225,21 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
 
     if isinstance(episode_indices, int):
         episode_indices = [episode_indices]
+
+    # Un index peut valoir None si le fetch de cet episode a echoue plus tot
+    # (ex: source Nakanime indisponible) - on l'ignore au lieu de planter ou
+    # de decaler les episodes suivants.
+    filtered_indices = []
+    for index in episode_indices:
+        if episodes[player_choice][index] is None:
+            print_status(f"Episode {index + 1} unavailable for this player, skipping.", "error")
+        else:
+            filtered_indices.append(index)
+    episode_indices = filtered_indices
+
+    if not episode_indices:
+        print_status("No available episodes to download for this player.", "error")
+        return 1
 
     urls = [episodes[player_choice][index] for index in episode_indices]
     episode_numbers = [index + 1 for index in episode_indices]

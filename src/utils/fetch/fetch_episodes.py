@@ -77,10 +77,14 @@ def fetch_nakanime_episodes(base_url, headers=None):
             print_status(f"No episodes found for Season {target_season}", "error")
             return None
             
-        player_episodes = {}
+        # On indexe par numero d'episode reel (pas par ordre d'arrivee) pour
+        # que la position dans la liste finale reste alignee sur ep_num - 1
+        # meme si un episode echoue au fetch (sinon tous les episodes suivants
+        # se retrouveraient decales d'une position, silencieusement).
+        player_episodes_by_num = {}
         path_src = "/api/sources/anime"
         url_src = f"https://nakanime.tv{path_src}"
-        
+
         for ep_num in ep_numbers:
             ep_page_url = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/{ep_num}"
             try:
@@ -89,13 +93,13 @@ def fetch_nakanime_episodes(base_url, headers=None):
                 if not m_ep_id:
                     continue
                 ep_id = int(m_ep_id.group(1))
-                
+
                 payload = {"anime_id": anime_id, "episode_id": ep_id, "turnstile_token": ""}
                 r_src = requests.post(url_src, headers={**req_headers, "Content-Type": "application/json"}, json=payload, timeout=10)
                 if r_src.status_code == 200:
                     dec_src = decode_nakanime_response(r_src.content, path_src)
                     sources = json.loads(dec_src.decode('utf-8'))
-                    
+
                     seen_counts = {}
                     for item in sources:
                         host = item.get('host', 'unknown').capitalize()
@@ -104,14 +108,19 @@ def fetch_nakanime_episodes(base_url, headers=None):
                         seen_counts[base_key] = seen_counts.get(base_key, 0) + 1
                         cnt = seen_counts[base_key]
                         player_key = f"{host} {cnt} ({lang})" if cnt > 1 else base_key
-                        
-                        if player_key not in player_episodes:
-                            player_episodes[player_key] = []
-                        player_episodes[player_key].append(item.get('url'))
+
+                        player_episodes_by_num.setdefault(player_key, {})[ep_num] = item.get('url')
             except Exception:
                 continue
-                
-        if player_episodes:
+
+        if player_episodes_by_num:
+            max_ep_num = max(ep_numbers)
+            player_episodes = {}
+            for player_key, urls_by_num in player_episodes_by_num.items():
+                # liste de taille max_ep_num, index i correspond a l'episode i+1
+                # (None pour un episode qui a echoue au fetch ou n'a pas ce player)
+                episode_list = [urls_by_num.get(n) for n in range(1, max_ep_num + 1)]
+                player_episodes[player_key] = episode_list
             print_status(f"Found {len(player_episodes)} player sources across VF & VOSTFR!", "success")
             return player_episodes
         else:

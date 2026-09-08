@@ -12,6 +12,10 @@ def get_episode_choice(episodes, player_choice):
          source_types[domain] = SourceDomains.DISPLAY_NAMES.get(domain, domain.capitalize())
 
     for i, url in enumerate(episodes[player_choice], 1):
+        if url is None:
+            print(f"{Colors.FAIL}  {i:2d}. Episode {i} - Unavailable ❌{Colors.ENDC}")
+            continue
+
         url_lower = url.lower()
         found_type = None
 
@@ -47,7 +51,7 @@ def get_episode_choice(episodes, player_choice):
                 valid_episodes = []
                 for i in range(num_episodes):
                     episode_url = episodes[player_choice][i]
-                    if not ('vk.com' in episode_url or 'myvi.tv' in episode_url):
+                    if episode_url and not ('vk.com' in episode_url or 'myvi.tv' in episode_url):
                         valid_episodes.append(i)
 
                 if not valid_episodes:
@@ -72,7 +76,9 @@ def get_episode_choice(episodes, player_choice):
 
                         if 1 <= num <= num_episodes:
                             episode_url = episodes[player_choice][num - 1]
-                            if 'vk.com' in episode_url or 'myvi.tv' in episode_url:
+                            if episode_url is None:
+                                print_status(f"Episode {num} is unavailable for this player", "error")
+                            elif 'vk.com' in episode_url or 'myvi.tv' in episode_url:
                                 print_status(f"Episode {num} source is deprecated and cannot be downloaded", "error")
                             else:
                                 valid_episodes.append(num - 1)
@@ -86,7 +92,9 @@ def get_episode_choice(episodes, player_choice):
 
                     if 1 <= num <= num_episodes:
                         episode_url = episodes[player_choice][num - 1]
-                        if 'vk.com' in episode_url or 'myvi.tv' in episode_url:
+                        if episode_url is None:
+                            print_status(f"Episode {num} is unavailable for this player", "error")
+                        elif 'vk.com' in episode_url or 'myvi.tv' in episode_url:
                             print_status(f"Episode {num} source is deprecated and cannot be downloaded", "error")
                         else:
                             valid_episodes.append(num - 1)

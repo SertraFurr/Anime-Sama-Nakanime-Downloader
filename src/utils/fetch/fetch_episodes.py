@@ -24,67 +24,109 @@ def decode_nakanime_response(response_bytes, url_path):
         out[i] = response_bytes[i] ^ key_bytes[i % len(key_bytes)]
     return bytes(out)
 
-def fetch_nakanime_episodes(base_url, headers=None):
+def _get_nakanime_session_and_headers(headers=None):
+    req_headers = {"User-Agent": "Mozilla/5.0"}
+    if headers and "User-Agent" in headers:
+        req_headers["User-Agent"] = headers["User-Agent"]
+    session = requests.Session()
+    session.headers.update(req_headers)
+    return session, req_headers
+
+
+def _get_nakanime_episode_numbers(session, anime_id, target_season):
+    """Recupere juste la liste des numeros d'episode existants (1-2 requetes,
+    pas cher) - separe du fetch des sources par episode (le vrai cout)."""
+    url_page = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/1"
+    res_page = session.get(url_page, timeout=10)
+
+    ep_numbers = []
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', res_page.text, re.DOTALL)
+    for s in scripts:
+        if 'animeId' in s and 'seasons' in s:
+            try:
+                data = json.loads(s.strip())
+                for season in data.get('seasons', []):
+                    if season.get('number', 1) == target_season:
+                        eps = season.get('episodes', [])
+                        ep_numbers = [e.get('number') for e in eps if e.get('number') is not None]
+                        break
+                break
+            except Exception:
+                pass
+
+    if not ep_numbers:
+        path_eps = f"/api/anime/{anime_id}/episodes"
+        res = session.get(f"https://nakanime.tv{path_eps}", timeout=15)
+        res.raise_for_status()
+        decrypted = decode_nakanime_response(res.content, path_eps)
+        data = json.loads(decrypted.decode('utf-8'))
+        all_episodes = data.get('data', [])
+        for ep in all_episodes:
+            s_num = ep.get('seasonNumber')
+            if s_num is None:
+                s_num = 1
+            if int(s_num) == target_season:
+                ep_numbers.append(ep.get('number', 1))
+        ep_numbers = sorted(list(set(ep_numbers)))
+
+    return ep_numbers
+
+
+def fetch_nakanime_episode_count(base_url, headers=None):
+    """Recupere uniquement le nombre d'episodes disponibles, sans faire le
+    fetch couteux (source par episode). Sert a demander a l'utilisateur
+    quels episodes il veut AVANT de payer le cout du fetch complet."""
+    unquoted = urllib.parse.unquote(base_url)
+    match_anime = re.search(r'/anime/(\d+)', unquoted)
+    if not match_anime:
+        return None
+    anime_id = int(match_anime.group(1))
+    match_season = re.search(r'/season/(\d+)', unquoted)
+    target_season = int(match_season.group(1)) if match_season else 1
+
+    try:
+        session, _ = _get_nakanime_session_and_headers(headers)
+        ep_numbers = _get_nakanime_episode_numbers(session, anime_id, target_season)
+        return max(ep_numbers) if ep_numbers else None
+    except Exception:
+        return None
+
+
+def fetch_nakanime_episodes(base_url, headers=None, wanted_episodes=None):
     unquoted = urllib.parse.unquote(base_url)
     match_anime = re.search(r'/anime/(\d+)', unquoted)
     if not match_anime:
         print_status("Could not determine Nakanime anime ID", "error")
         return None
     anime_id = int(match_anime.group(1))
-    
+
     match_season = re.search(r'/season/(\d+)', unquoted)
     target_season = int(match_season.group(1)) if match_season else 1
-    
-    req_headers = {"User-Agent": "Mozilla/5.0"}
-    if headers and "User-Agent" in headers:
-        req_headers["User-Agent"] = headers["User-Agent"]
-        
+
     print_status(f"Fetching Nakanime player sources for Season {target_season}...", "loading")
     try:
         # Session partagee pour toutes les requetes vers nakanime.tv - reutilise
         # la connexion TCP/TLS (keep-alive) au lieu d'en rouvrir une par requete,
         # ce qui accelere nettement une longue serie de requetes sequentielles
         # sans changer le rythme/volume percu par le serveur.
-        session = requests.Session()
-        session.headers.update(req_headers)
+        session, req_headers = _get_nakanime_session_and_headers(headers)
 
-        url_page = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/1"
-        res_page = session.get(url_page, timeout=10)
-
-        ep_numbers = []
-        scripts = re.findall(r'<script[^>]*>(.*?)</script>', res_page.text, re.DOTALL)
-        for s in scripts:
-            if 'animeId' in s and 'seasons' in s:
-                try:
-                    data = json.loads(s.strip())
-                    for season in data.get('seasons', []):
-                        if season.get('number', 1) == target_season:
-                            eps = season.get('episodes', [])
-                            ep_numbers = [e.get('number') for e in eps if e.get('number') is not None]
-                            break
-                    break
-                except Exception:
-                    pass
-
-        if not ep_numbers:
-            path_eps = f"/api/anime/{anime_id}/episodes"
-            res = session.get(f"https://nakanime.tv{path_eps}", timeout=15)
-            res.raise_for_status()
-            decrypted = decode_nakanime_response(res.content, path_eps)
-            data = json.loads(decrypted.decode('utf-8'))
-            all_episodes = data.get('data', [])
-            for ep in all_episodes:
-                s_num = ep.get('seasonNumber')
-                if s_num is None:
-                    s_num = 1
-                if int(s_num) == target_season:
-                    ep_numbers.append(ep.get('number', 1))
-            ep_numbers = sorted(list(set(ep_numbers)))
-
-        if not ep_numbers:
+        all_ep_numbers = _get_nakanime_episode_numbers(session, anime_id, target_season)
+        if not all_ep_numbers:
             print_status(f"No episodes found for Season {target_season}", "error")
             return None
-            
+
+        # Si l'appelant sait deja quels episodes il veut (choisis avant ce
+        # fetch), on ne paie le cout (et le rate-limit) que pour ceux-la -
+        # le reste garde une position None dans la liste finale, alignee sur
+        # le nombre total reel d'episodes du site.
+        if wanted_episodes:
+            ep_numbers = [n for n in all_ep_numbers if n in wanted_episodes]
+            if not ep_numbers:
+                ep_numbers = all_ep_numbers
+        else:
+            ep_numbers = all_ep_numbers
+
         # On indexe par numero d'episode reel (pas par ordre d'arrivee) pour
         # que la position dans la liste finale reste alignee sur ep_num - 1
         # meme si un episode echoue au fetch (sinon tous les episodes suivants
@@ -158,7 +200,11 @@ def fetch_nakanime_episodes(base_url, headers=None):
                     player_episodes_by_num.setdefault(player_key, {})[ep_num] = item.get('url')
 
         if player_episodes_by_num:
-            max_ep_num = max(ep_numbers)
+            # Toujours dimensionne sur le total reel de la saison (pas juste
+            # le sous-ensemble demande) pour que les index restent coherents
+            # avec ce que le reste du programme (selection episode/joueur)
+            # attend deja.
+            max_ep_num = max(all_ep_numbers)
             player_episodes = {}
             for player_key, urls_by_num in player_episodes_by_num.items():
                 # liste de taille max_ep_num, index i correspond a l'episode i+1
@@ -175,9 +221,9 @@ def fetch_nakanime_episodes(base_url, headers=None):
         print_status(f"Failed to fetch Nakanime episodes: {str(e)}", "error")
         return None
 
-def fetch_episodes(base_url, headers=None):
+def fetch_episodes(base_url, headers=None, wanted_episodes=None):
     if 'nakanime.tv' in base_url.lower():
-        return fetch_nakanime_episodes(base_url, headers)
+        return fetch_nakanime_episodes(base_url, headers, wanted_episodes=wanted_episodes)
 
     js_url = base_url.rstrip('/') + '/episodes.js'
     print_status("Fetching episode list...", "loading")

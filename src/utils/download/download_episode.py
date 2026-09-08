@@ -11,6 +11,10 @@ PREFIX_URL = "https://myanimelist.net/search/prefix.json"
 
 _mal_search_cache = {}
 _cache_lock = threading.Lock()
+# Tracks which anime we've already printed the "using cached MAL data"
+# message for, so a multi-threaded batch download doesn't print it once
+# per episode (it was flooding the interleaved progress bars).
+_mal_cache_hit_announced = set()
 
 
 def normalize(text):
@@ -200,7 +204,9 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None):
             cache_key = anime_name.lower().strip()
             
             if cache_key in _mal_search_cache:
-                print_status(f"Using cached MAL data (already in memory)", "info")
+                if cache_key not in _mal_cache_hit_announced:
+                    _mal_cache_hit_announced.add(cache_key)
+                    print_status(f"Using cached MAL data (already in memory)", "info")
                 return
             
             if os.path.exists(match_file_path):

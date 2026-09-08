@@ -19,6 +19,27 @@ from src.utils.extract.extract_filemoon_video_source   import extract_filemoon_v
 from src.utils.extract.extract_luluvdo_video_source   import extract_luluvdo_video_source
 from src.utils.extract.extract_vidzy_video_source     import extract_vidzy_video_source
 
+try:
+    from urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+except Exception:
+    pass
+
+
+def _get_m3u8(url, headers, timeout=10):
+    """GET a playlist URL, falling back to an unverified TLS connection if the
+    CDN box serving it has a broken/incomplete certificate chain (observed on
+    several dynamically-assigned Vidmoly/Uqload/Ansembed CDN boxes). The
+    playlist itself is public video stream data, not sensitive, so relaxing
+    verification here (and only here, only as a fallback) is an acceptable
+    tradeoff to avoid a hard failure on an otherwise-working stream."""
+    try:
+        return requests.get(url, headers=headers, timeout=timeout)
+    except requests.exceptions.SSLError:
+        print_status("CDN certificate invalid, retrying without TLS verification...", "warning")
+        return requests.get(url, headers=headers, timeout=timeout, verify=False)
+
+
 def fetch_video_source(url):
     def process_single_url(single_url):
         print_status(f"Processing video URL: {single_url[:50]}...", "loading")
@@ -106,8 +127,7 @@ def fetch_video_source(url):
             try:
                 headers = {"accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8", "accept-language": "fr-FR,fr;q=0.8", "cache-control": "no-cache", "sec-gpc": "1", "upgrade-insecure-requests": "1", "user-agent": "Chrome/150.0.0.0 Safari/67.67"}
 
-                response = requests.get(master_m3u8,headers=headers,timeout=10
-                )
+                response = _get_m3u8(master_m3u8, headers, timeout=10)
 
                 response.raise_for_status()
 
@@ -138,7 +158,7 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://oneupload.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:
@@ -179,7 +199,7 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://vidmoly.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:
@@ -201,7 +221,7 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://ansembed.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:

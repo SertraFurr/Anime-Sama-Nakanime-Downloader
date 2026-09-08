@@ -45,10 +45,10 @@ import re
 import sys
 import argparse
 from concurrent.futures                         import ThreadPoolExecutor, as_completed
-from src.utils.fetch.fetch_episodes             import fetch_episodes
+from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count
 from src.utils.fetch.fetch_video_source         import fetch_video_source
 from src.utils.print.print_episodes             import print_episodes
-from src.utils.get.get_player_choice            import get_player_choice
+from src.utils.get.get_player_choice            import get_player_choice, is_fast_player
 from src.utils.get.get_episode_choice           import get_episode_choice
 from src.utils.check.check_package              import check_package
 from src.utils.check.check_ffmpeg_installed     import check_ffmpeg_installed
@@ -114,12 +114,40 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
 
     anime_name = extract_anime_name(base_url)
     print_status(f"Detected anime: {anime_name}", "info")
-    episodes = fetch_episodes(base_url, headers=headers)
+
+    # Nakanime fetch le cout reel un episode a la fois (rate-limite par le
+    # site au-dela de ~40-50 requetes/minute) - demander a l'utilisateur
+    # quels episodes il veut AVANT ce fetch (plutot qu'apres, comme pour
+    # anime-sama ou le cout est negligeable) evite de payer inutilement pour
+    # toute une saison quand il n'en veut qu'une poignee.
+    wanted_episodes = None
+    if 'nakanime.tv' in base_url.lower():
+        nb_episodes = fetch_nakanime_episode_count(base_url, headers=headers)
+        if nb_episodes:
+            selection_str = None
+            if args.latest:
+                selection_str = str(nb_episodes)
+            elif args.episodes:
+                selection_str = args.episodes
+            elif interactive:
+                selection_str = input(
+                    f"{Colors.BOLD}This season has {nb_episodes} episodes. "
+                    f"Which ones do you want (1-{nb_episodes}, comma-separated, ranges like 12-49, or 'all')? "
+                    f"{Colors.ENDC}"
+                ).strip()
+                args.episodes = selection_str
+
+            if selection_str and selection_str.lower() != 'all':
+                indices = parse_selection_indices(selection_str, nb_episodes)
+                if indices:
+                    wanted_episodes = {i + 1 for i in indices}
+
+    episodes = fetch_episodes(base_url, headers=headers, wanted_episodes=wanted_episodes)
     if not episodes:
         print_status("Failed to fetch episodes.", "error")
         return 1
 
-    print_episodes(episodes)
+    print_episodes(episodes, wanted_episodes=wanted_episodes)
 
     player_choice = None
     if args.player:
@@ -160,7 +188,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
             print_status(f"Player '{args.player}' not found.", "error")
             return 1
     else:
-        player_choice = get_player_choice(episodes)
+        player_choice = get_player_choice(episodes, wanted_episodes=wanted_episodes)
 
     if not player_choice:
         return 1
@@ -188,14 +216,13 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                     if url and 'vk.com' not in url and 'myvi.tv' not in url:
                         episode_indices.append(i)
             else:
-                try:
-                    episode_indices = []
-                    for x in args.episodes.split(','):
-                        if x.strip():
-                            val = int(x.strip())
-                            if 1 <= val <= len(episodes[player_choice]):
-                                episode_indices.append(val - 1)
-                except ValueError:
+                # parse_selection_indices supporte deja les plages (12-49) et
+                # les listes separees par virgules - l'ancien parsing local
+                # ici ne gerait que les virgules et plantait ("Invalid
+                # episode list format") des qu'un tiret apparaissait, y
+                # compris pour la selection faite juste avant le fetch.
+                episode_indices = parse_selection_indices(args.episodes, len(episodes[player_choice]))
+                if not episode_indices:
                     print_status("Invalid episode list format", "error")
                     return 1
         else:
@@ -247,14 +274,21 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
         m = re.search(r'\(([^)]+)\)\s*$', player_key)
         return m.group(1).strip().upper() if m else None
 
+    # Quand le lecteur choisi echoue pour un episode, on prefere retomber sur
+    # un autre lecteur "rapide" (HLS/m3u8, multi-thread) avant les lecteurs
+    # a fichier unique (Sibnet, Sendvid) - sinon un fallback silencieux vers
+    # Sibnet fait perdre tout le gain de vitesse du choix initial.
+    def _speed_sort_key(p):
+        return 0 if is_fast_player(p) else 1
+
     chosen_lang = _player_lang(player_choice)
     other_players = [p for p in episodes.keys() if p != player_choice]
     if chosen_lang:
-        same_lang = [p for p in other_players if _player_lang(p) == chosen_lang]
-        other_lang = [p for p in other_players if _player_lang(p) != chosen_lang]
+        same_lang = sorted([p for p in other_players if _player_lang(p) == chosen_lang], key=_speed_sort_key)
+        other_lang = sorted([p for p in other_players if _player_lang(p) != chosen_lang], key=_speed_sort_key)
         player_order = [player_choice] + same_lang + other_lang
     else:
-        player_order = [player_choice] + other_players
+        player_order = [player_choice] + sorted(other_players, key=_speed_sort_key)
 
     if not args.no_mal and get_anime_name:
         os.makedirs(save_dir, exist_ok=True)

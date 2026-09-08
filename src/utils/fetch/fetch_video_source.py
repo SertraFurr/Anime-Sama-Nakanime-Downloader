@@ -1,6 +1,7 @@
 import re
 import time
 import requests
+from urllib.parse import urlparse
 
 from src.var                                            import print_status, SourceDomains
 from src.utils.parse.parse_m3u8_content                 import parse_m3u8_content
@@ -18,6 +19,49 @@ from src.utils.extract.extract_voe_video_source        import extract_voe_video_
 from src.utils.extract.extract_filemoon_video_source   import extract_filemoon_video_source
 from src.utils.extract.extract_luluvdo_video_source   import extract_luluvdo_video_source
 from src.utils.extract.extract_vidzy_video_source     import extract_vidzy_video_source
+
+try:
+    from urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+except Exception:
+    pass
+
+
+def _get_m3u8(url, headers, timeout=10):
+    """GET a playlist URL, falling back to an unverified TLS connection if the
+    CDN box serving it has a broken/incomplete certificate chain (observed on
+    several dynamically-assigned Vidmoly/Uqload/Ansembed CDN boxes). The
+    playlist itself is public video stream data, not sensitive, so relaxing
+    verification here (and only here, only as a fallback) is an acceptable
+    tradeoff to avoid a hard failure on an otherwise-working stream."""
+    try:
+        return requests.get(url, headers=headers, timeout=timeout)
+    except requests.exceptions.SSLError:
+        print_status("CDN certificate invalid, retrying without TLS verification...", "warning")
+        return requests.get(url, headers=headers, timeout=timeout, verify=False)
+
+
+def _explain_empty_m3u8(response):
+    """A 200 response with an empty body and no real content is usually not
+    the CDN being broken - it's a local DNS/content filter (NextDNS, Pi-hole,
+    AdGuard Home, a corporate proxy, etc.) intercepting the connection and
+    returning a stub response instead of proxying to the real server (this
+    is also what causes the SSL certificate to look invalid in the first
+    place, since the filter can't present the CDN's real cert). Most of
+    these filters advertise themselves via a response header, so surface
+    that directly instead of a generic "no streams found" message that
+    makes it look like the video host itself is broken."""
+    blocker_header = next((k for k in response.headers if 'blocked-by' in k.lower()), None)
+    if blocker_header:
+        blocker = response.headers[blocker_header]
+        return (f"Request blocked by '{blocker}' (a DNS/content filter on your network), not by the video host. "
+                f"Add this domain to your {blocker} allowlist to fix this: {urlparse(response.url).hostname}")
+    if response.status_code == 200 and not response.text.strip():
+        return ("Empty response from the CDN with no error - this is often caused by a DNS/content filter "
+                "(NextDNS, Pi-hole, AdGuard Home, a router-level or antivirus HTTPS filter) silently blocking "
+                f"this domain rather than the video host being down: {urlparse(response.url).hostname}")
+    return None
+
 
 def fetch_video_source(url):
     def process_single_url(single_url):
@@ -57,19 +101,25 @@ def fetch_video_source(url):
             return None
 
         # VIDMOLY DOMAIN & ROUTE CONVERSION
+        # vidmoly.biz is preferred (canonical embed host), but its cert has
+        # been known to break server-side - keep every other domain variant
+        # as a fallback candidate instead of hard-committing to .biz, so a
+        # single dead domain doesn't take down every Vidmoly download.
+        vidmoly_candidates = []
         if 'vidmoly' in single_url:
             m_route = re.search(r'/(?:v|w)/([a-zA-Z0-9]+)', single_url)
             if m_route:
                 code = m_route.group(1)
-                single_url = f"https://vidmoly.biz/embed-{code}.html"
-            elif 'vidmoly.to' in single_url:
-                single_url = single_url.replace('vidmoly.to', 'vidmoly.biz')
-            elif 'vidmoly.net' in single_url:
-                single_url = single_url.replace('vidmoly.net', 'vidmoly.biz')
-            elif 'vidmoly.org' in single_url:
-                single_url = single_url.replace('vidmoly.org', 'vidmoly.biz')
-            elif 'vidmoly.me' in single_url:
-                single_url = single_url.replace('vidmoly.me', 'vidmoly.biz')
+                vidmoly_candidates = [f"https://{d}/embed-{code}.html" for d in
+                                       ("vidmoly.biz", "vidmoly.org", "vidmoly.net", "vidmoly.to", "vidmoly.me")]
+            else:
+                for domain in ("vidmoly.to", "vidmoly.net", "vidmoly.org", "vidmoly.me"):
+                    if domain in single_url:
+                        others = [d for d in ("vidmoly.biz", "vidmoly.org", "vidmoly.net", "vidmoly.to", "vidmoly.me") if d != domain]
+                        vidmoly_candidates = [single_url] + [single_url.replace(domain, d) for d in others]
+                        break
+            if vidmoly_candidates:
+                single_url = vidmoly_candidates[0]
             print_status("Normalized Vidmoly domain/route", "info")
         
         # SENDVID EXTRACTION
@@ -100,8 +150,7 @@ def fetch_video_source(url):
             try:
                 headers = {"accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8", "accept-language": "fr-FR,fr;q=0.8", "cache-control": "no-cache", "sec-gpc": "1", "upgrade-insecure-requests": "1", "user-agent": "Chrome/150.0.0.0 Safari/67.67"}
 
-                response = requests.get(master_m3u8,headers=headers,timeout=10
-                )
+                response = _get_m3u8(master_m3u8, headers, timeout=10)
 
                 response.raise_for_status()
 
@@ -132,11 +181,17 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://oneupload.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:
-                    print_status("No video streams found in M3U8 playlist", "error")
+                    blocked_explanation = _explain_empty_m3u8(response)
+                    if blocked_explanation:
+                        print_status(blocked_explanation, "error")
+                    else:
+                        body_preview = response.text[:200].replace('\n', ' ').strip()
+                        relevant_headers = {k: v for k, v in response.headers.items() if k.lower() in ('content-length', 'content-type', 'set-cookie', 'location', 'server')}
+                        print_status(f"No video streams found in M3U8 playlist (status {response.status_code}, headers: {relevant_headers}, body: {body_preview!r})", "error")
                     return None
                 return max(streams, key=lambda x: int(x.get('BANDWIDTH', 0)))['url']
             except requests.RequestException as e:
@@ -145,18 +200,26 @@ def fetch_video_source(url):
             
         # VIDMOLY EXTRACTION
         elif 'vidmoly' in single_url:
-            attempt = 0
             html_content = None
-            
-            while True:
-                attempt += 1
-                html_content = fetch_page_content(single_url)
-                if html_content and '<title>Please wait</title>' in html_content and not "url.indexOf('?'" in html_content:
-                    print_status(f"Vidmoly rate limit ('Please wait') detected. Retrying in 3s (Attempt {attempt})...", "warning")
-                    time.sleep(3)
-                    continue
-                break
-                
+            candidates = vidmoly_candidates or [single_url]
+
+            for candidate_url in candidates:
+                attempt = 0
+                while attempt < 5:
+                    attempt += 1
+                    html_content = fetch_page_content(candidate_url)
+                    if html_content and '<title>Please wait</title>' in html_content and not "url.indexOf('?'" in html_content:
+                        print_status(f"Vidmoly rate limit ('Please wait') detected. Retrying in 3s (Attempt {attempt})...", "warning")
+                        time.sleep(3)
+                        continue
+                    break
+
+                if html_content:
+                    single_url = candidate_url
+                    break
+                elif len(candidates) > 1:
+                    print_status(f"Vidmoly domain {candidate_url} unreachable, trying next domain...", "warning")
+
             m3u8_url = extract_vidmoly_video_source(html_content, single_url)
             if not m3u8_url:
                 return None
@@ -165,11 +228,17 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://vidmoly.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:
-                    print_status("No video streams found in M3U8 playlist", "error")
+                    blocked_explanation = _explain_empty_m3u8(response)
+                    if blocked_explanation:
+                        print_status(blocked_explanation, "error")
+                    else:
+                        body_preview = response.text[:200].replace('\n', ' ').strip()
+                        relevant_headers = {k: v for k, v in response.headers.items() if k.lower() in ('content-length', 'content-type', 'set-cookie', 'location', 'server')}
+                        print_status(f"No video streams found in M3U8 playlist (status {response.status_code}, headers: {relevant_headers}, body: {body_preview!r})", "error")
                     return None
                 return max(streams, key=lambda x: int(x.get('BANDWIDTH', 0)))['url']
             except requests.RequestException as e:
@@ -187,11 +256,17 @@ def fetch_video_source(url):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/108.0',
                     'Referer': 'https://ansembed.net/'
                 }
-                response = requests.get(m3u8_url, headers=headers, timeout=10)
+                response = _get_m3u8(m3u8_url, headers, timeout=10)
                 response.raise_for_status()
                 streams = parse_m3u8_content(response.text)
                 if not streams:
-                    print_status("No video streams found in M3U8 playlist", "error")
+                    blocked_explanation = _explain_empty_m3u8(response)
+                    if blocked_explanation:
+                        print_status(blocked_explanation, "error")
+                    else:
+                        body_preview = response.text[:200].replace('\n', ' ').strip()
+                        relevant_headers = {k: v for k, v in response.headers.items() if k.lower() in ('content-length', 'content-type', 'set-cookie', 'location', 'server')}
+                        print_status(f"No video streams found in M3U8 playlist (status {response.status_code}, headers: {relevant_headers}, body: {body_preview!r})", "error")
                     return None
                 return max(streams, key=lambda x: int(x.get('BANDWIDTH', 0)))['url']
             except requests.RequestException as e:

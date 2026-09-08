@@ -1,6 +1,6 @@
 from src.var import Colors, print_separator, SourceDomains
 
-def print_episodes(episodes):
+def print_episodes(episodes, wanted_episodes=None):
     SOURCE_CONFIG = {
         "vk.com": ("DEPRECATED", Colors.FAIL, False),
         "myvi.tv": ("DEPRECATED", Colors.FAIL, False),
@@ -42,8 +42,15 @@ def print_episodes(episodes):
     for category, urls in episodes.items():
         print(f"\n{Colors.BOLD}{Colors.OKCYAN}🎮 {category}:{Colors.ENDC} ({len(urls)} episodes)")
         print_separator("─", 40)
-        
+
         for i, url in enumerate(urls, start=1):
+            # Un episode hors de la selection demandee n'a simplement pas ete
+            # fetch (pas "indisponible" - on ne veut pas balancer des
+            # centaines de lignes "Unavailable" pour des episodes que
+            # l'utilisateur n'a meme pas demandes).
+            if wanted_episodes and i not in wanted_episodes:
+                continue
+
             if url is None:
                 print(f"{Colors.FAIL}  {i:2d}. Episode {i} - Unavailable ❌{Colors.ENDC}")
                 continue

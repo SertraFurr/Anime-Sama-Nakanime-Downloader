@@ -1,18 +1,57 @@
 from src.var import Colors, print_status, print_separator, SourceDomains
 
-def get_player_choice(episodes):
+# Hebergeurs qui servent la video en HLS/m3u8 (plusieurs segments) - le
+# telechargeur peut les recuperer en plusieurs morceaux/threads en parallele,
+# ce qui les rend generalement bien plus rapides qu'un lien fichier unique.
+# Verifie dans le code d'extraction de chaque hebergeur, pas devine.
+SEGMENTED_HOSTS = {
+    "vidmoly", "voe", "vidzy", "filemoon", "uqload", "ansembed",
+    "movearnpre", "embed4me", "lulustream", "luluvdo",
+}
+# Sibnet et Sendvid renvoient un lien fichier unique (pas de decoupage
+# possible) - un seul flux, donc potentiellement plus lent sur un gros fichier.
+DIRECT_FILE_HOSTS = {"sibnet", "sendvid"}
+
+
+def is_fast_player(player_key):
+    """True if this player serves HLS/m3u8 (segmented, multi-thread capable)
+    rather than a single direct file - used to prefer fast alternatives when
+    a player fails and the downloader falls back to another one."""
+    return player_key.split(" ")[0].lower() in SEGMENTED_HOSTS
+
+
+def _speed_hint(player_key):
+    base = player_key.split(" ")[0].lower()
+    if base in SEGMENTED_HOSTS:
+        return f"{Colors.OKGREEN}⚡ Fast{Colors.ENDC}"
+    if base in DIRECT_FILE_HOSTS:
+        return f"{Colors.WARNING}Single file{Colors.ENDC}"
+    return None
+
+
+def get_player_choice(episodes, wanted_episodes=None):
     print(f"\n{Colors.BOLD}{Colors.HEADER}🎮 SELECT PLAYER{Colors.ENDC}")
     print_separator()
-    
+
     available_players = list(episodes.keys())
     valid_sources = SourceDomains.PLAYERS
     for i, player in enumerate(available_players, 1):
+        # Si seule une partie de la saison a ete demandee/fetchee, ne compte
+        # que sur cette portion - sinon "51/367" donne l'impression trompeuse
+        # que ce lecteur est presque tout casse, alors qu'il couvre tout ce
+        # qui a ete demande.
+        if wanted_episodes:
+            urls_to_check = [url for idx, url in enumerate(episodes[player], 1) if idx in wanted_episodes]
+        else:
+            urls_to_check = episodes[player]
         working_episodes = sum(
-            1 for url in episodes[player]
+            1 for url in urls_to_check
             if SourceDomains.is_valid_url(url, category=player)
         )
-        total_episodes = len(episodes[player])
-        print(f"{Colors.OKCYAN}  {i}. {player} ({working_episodes}/{total_episodes} working episodes){Colors.ENDC}")
+        total_episodes = len(urls_to_check)
+        speed_hint = _speed_hint(player)
+        speed_suffix = f" [{speed_hint}{Colors.OKCYAN}]" if speed_hint else ""
+        print(f"{Colors.OKCYAN}  {i}. {player} ({working_episodes}/{total_episodes} working episodes){speed_suffix}{Colors.ENDC}")
     
     while True:
         try:

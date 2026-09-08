@@ -11,6 +11,10 @@ PREFIX_URL = "https://myanimelist.net/search/prefix.json"
 
 _mal_search_cache = {}
 _cache_lock = threading.Lock()
+# Tracks which anime we've already printed the "using cached MAL data"
+# message for, so a multi-threaded batch download doesn't print it once
+# per episode (it was flooding the interleaved progress bars).
+_mal_cache_hit_announced = set()
 
 
 def normalize(text):
@@ -200,7 +204,9 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None):
             cache_key = anime_name.lower().strip()
             
             if cache_key in _mal_search_cache:
-                print_status(f"Using cached MAL data (already in memory)", "info")
+                if cache_key not in _mal_cache_hit_announced:
+                    _mal_cache_hit_announced.add(cache_key)
+                    print_status(f"Using cached MAL data (already in memory)", "info")
                 return
             
             if os.path.exists(match_file_path):
@@ -270,10 +276,19 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         print_status(f"Could not extract video source for episode {episode_num}", "error")
         return False, None
     
-    print_separator()
-    print_status(f"Processing episode: {episode_num}", "info")
-    print_status(f"Source: {url[:60]}...", "info")
-    
+    # Batched into a single print() call: when several episodes download in
+    # parallel threads, each separate print()/print_status() call is its own
+    # stdout write, so another thread's lines can land in between them -
+    # producing the garbled, out-of-order header blocks seen in threaded
+    # batch runs. One call per block keeps each episode's header intact.
+    sep_line = "─" * 65
+    header = (
+        f"{Colors.OKBLUE}{Colors.BOLD}{sep_line}{Colors.ENDC}\n"
+        f"{Colors.OKBLUE}ℹ️ Processing episode: {episode_num}{Colors.ENDC}\n"
+        f"{Colors.OKBLUE}ℹ️ Source: {url[:60]}...{Colors.ENDC}"
+    )
+    print(header)
+
     season_dir = save_dir
     os.makedirs(season_dir, exist_ok=True)
 
@@ -283,11 +298,14 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         print_status("anime_name is empty, skipping MAL matching", "warning")
     else:
         create_match_file(season_dir, anime_name, interactive=interactive)
-    
+
     save_path = os.path.join(season_dir, f"{anime_name if anime_name else 'episode'}_{episode_num}.mp4")
-    
-    print(f"\n{Colors.BOLD}{Colors.HEADER}⬇️ DOWNLOADING EPISODE {episode_num}{Colors.ENDC}")
-    print_separator()
+
+    download_header = (
+        f"\n{Colors.BOLD}{Colors.HEADER}⬇️ DOWNLOADING EPISODE {episode_num}{Colors.ENDC}\n"
+        f"{Colors.OKBLUE}{Colors.BOLD}{sep_line}{Colors.ENDC}"
+    )
+    print(download_header)
     
     try:
         success, output_path = download_video(video_source, save_path, use_ts_threading=use_ts_threading, url=url, automatic_mp4=automatic_mp4, interactive=interactive)
@@ -299,19 +317,19 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         print_status(f"Failed to download episode {episode_num}", "error")
         return False, None
     
-    print_separator()
-    
     if ('m3u8' in video_source or 'LULU_DEFERRED:' in video_source) and output_path and output_path.endswith('.ts'):
-        print_status(f"Video saved as {output_path} (MPEG-TS format, playable in VLC or similar players)", "success")
+        print(f"{Colors.OKBLUE}{Colors.BOLD}{sep_line}{Colors.ENDC}\n"
+              f"{Colors.OKGREEN}✅ Video saved as {output_path} (MPEG-TS format, playable in VLC or similar players){Colors.ENDC}")
         if automatic_mp4:
             success, final_path = convert_ts_to_mp4(output_path, save_path, pre_selected_tool)
             if success:
-                print_status(f"Episode {episode_num} successfully saved to: {final_path}", "success")
+                removed_note = ""
                 try:
                     os.remove(output_path)
-                    print_status(f"Removed temporary .ts file: {output_path}", "info")
+                    removed_note = f"\n{Colors.OKBLUE}ℹ️ Removed temporary .ts file: {output_path}{Colors.ENDC}"
                 except Exception as e:
-                    print_status(f"Could not remove temporary .ts file: {str(e)}", "warning")
+                    removed_note = f"\n{Colors.WARNING}⚠️ Could not remove temporary .ts file: {str(e)}{Colors.ENDC}"
+                print(f"{Colors.OKGREEN}✅ Episode {episode_num} successfully saved to: {final_path}{Colors.ENDC}{removed_note}")
                 return True, final_path
             else:
                 print_status(f"Conversion failed for episode {episode_num}, keeping .ts file: {output_path}", "error")
@@ -320,5 +338,6 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
             print_status(f"Keeping .ts file for episode {episode_num}: {output_path}", "info")
             return True, output_path
     else:
-        print_status(f"Episode {episode_num} successfully saved to: {save_path}", "success")
+        print(f"{Colors.OKBLUE}{Colors.BOLD}{sep_line}{Colors.ENDC}\n"
+              f"{Colors.OKGREEN}✅ Episode {episode_num} successfully saved to: {save_path}{Colors.ENDC}")
         return True, save_path

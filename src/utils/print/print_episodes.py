@@ -44,6 +44,10 @@ def print_episodes(episodes):
         print_separator("─", 40)
         
         for i, url in enumerate(urls, start=1):
+            if url is None:
+                print(f"{Colors.FAIL}  {i:2d}. Episode {i} - Unavailable ❌{Colors.ENDC}")
+                continue
+
             url_lower = url.lower()
             found = False
 

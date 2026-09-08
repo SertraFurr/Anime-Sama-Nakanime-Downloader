@@ -57,19 +57,25 @@ def fetch_video_source(url):
             return None
 
         # VIDMOLY DOMAIN & ROUTE CONVERSION
+        # vidmoly.biz is preferred (canonical embed host), but its cert has
+        # been known to break server-side - keep every other domain variant
+        # as a fallback candidate instead of hard-committing to .biz, so a
+        # single dead domain doesn't take down every Vidmoly download.
+        vidmoly_candidates = []
         if 'vidmoly' in single_url:
             m_route = re.search(r'/(?:v|w)/([a-zA-Z0-9]+)', single_url)
             if m_route:
                 code = m_route.group(1)
-                single_url = f"https://vidmoly.biz/embed-{code}.html"
-            elif 'vidmoly.to' in single_url:
-                single_url = single_url.replace('vidmoly.to', 'vidmoly.biz')
-            elif 'vidmoly.net' in single_url:
-                single_url = single_url.replace('vidmoly.net', 'vidmoly.biz')
-            elif 'vidmoly.org' in single_url:
-                single_url = single_url.replace('vidmoly.org', 'vidmoly.biz')
-            elif 'vidmoly.me' in single_url:
-                single_url = single_url.replace('vidmoly.me', 'vidmoly.biz')
+                vidmoly_candidates = [f"https://{d}/embed-{code}.html" for d in
+                                       ("vidmoly.biz", "vidmoly.org", "vidmoly.net", "vidmoly.to", "vidmoly.me")]
+            else:
+                for domain in ("vidmoly.to", "vidmoly.net", "vidmoly.org", "vidmoly.me"):
+                    if domain in single_url:
+                        others = [d for d in ("vidmoly.biz", "vidmoly.org", "vidmoly.net", "vidmoly.to", "vidmoly.me") if d != domain]
+                        vidmoly_candidates = [single_url] + [single_url.replace(domain, d) for d in others]
+                        break
+            if vidmoly_candidates:
+                single_url = vidmoly_candidates[0]
             print_status("Normalized Vidmoly domain/route", "info")
         
         # SENDVID EXTRACTION
@@ -145,18 +151,26 @@ def fetch_video_source(url):
             
         # VIDMOLY EXTRACTION
         elif 'vidmoly' in single_url:
-            attempt = 0
             html_content = None
-            
-            while True:
-                attempt += 1
-                html_content = fetch_page_content(single_url)
-                if html_content and '<title>Please wait</title>' in html_content and not "url.indexOf('?'" in html_content:
-                    print_status(f"Vidmoly rate limit ('Please wait') detected. Retrying in 3s (Attempt {attempt})...", "warning")
-                    time.sleep(3)
-                    continue
-                break
-                
+            candidates = vidmoly_candidates or [single_url]
+
+            for candidate_url in candidates:
+                attempt = 0
+                while attempt < 5:
+                    attempt += 1
+                    html_content = fetch_page_content(candidate_url)
+                    if html_content and '<title>Please wait</title>' in html_content and not "url.indexOf('?'" in html_content:
+                        print_status(f"Vidmoly rate limit ('Please wait') detected. Retrying in 3s (Attempt {attempt})...", "warning")
+                        time.sleep(3)
+                        continue
+                    break
+
+                if html_content:
+                    single_url = candidate_url
+                    break
+                elif len(candidates) > 1:
+                    print_status(f"Vidmoly domain {candidate_url} unreachable, trying next domain...", "warning")
+
             m3u8_url = extract_vidmoly_video_source(html_content, single_url)
             if not m3u8_url:
                 return None

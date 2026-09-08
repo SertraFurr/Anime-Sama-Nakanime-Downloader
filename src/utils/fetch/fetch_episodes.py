@@ -3,7 +3,6 @@ import json
 import time
 import requests
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
 from src.var import print_status
 
 cO = "nkapiv1"
@@ -42,9 +41,16 @@ def fetch_nakanime_episodes(base_url, headers=None):
         
     print_status(f"Fetching Nakanime player sources for Season {target_season}...", "loading")
     try:
+        # Session partagee pour toutes les requetes vers nakanime.tv - reutilise
+        # la connexion TCP/TLS (keep-alive) au lieu d'en rouvrir une par requete,
+        # ce qui accelere nettement une longue serie de requetes sequentielles
+        # sans changer le rythme/volume percu par le serveur.
+        session = requests.Session()
+        session.headers.update(req_headers)
+
         url_page = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/1"
-        res_page = requests.get(url_page, headers=req_headers, timeout=10)
-        
+        res_page = session.get(url_page, timeout=10)
+
         ep_numbers = []
         scripts = re.findall(r'<script[^>]*>(.*?)</script>', res_page.text, re.DOTALL)
         for s in scripts:
@@ -62,7 +68,7 @@ def fetch_nakanime_episodes(base_url, headers=None):
 
         if not ep_numbers:
             path_eps = f"/api/anime/{anime_id}/episodes"
-            res = requests.get(f"https://nakanime.tv{path_eps}", headers=req_headers, timeout=15)
+            res = session.get(f"https://nakanime.tv{path_eps}", timeout=15)
             res.raise_for_status()
             decrypted = decode_nakanime_response(res.content, path_eps)
             data = json.loads(decrypted.decode('utf-8'))
@@ -87,37 +93,59 @@ def fetch_nakanime_episodes(base_url, headers=None):
         path_src = "/api/sources/anime"
         url_src = f"https://nakanime.tv{path_src}"
 
-        def fetch_one_episode_sources(ep_num):
+        # Envoyer ~700 requetes sequentielles sans pause declenche du
+        # rate-limiting cote serveur, surtout vers la fin d'une longue
+        # saison - d'ou un petit delai entre chaque episode et une
+        # retentative avant d'abandonner un episode donne. Le parallelisme
+        # (plusieurs requetes en meme temps) a ete teste et rend les choses
+        # pires: le serveur rate-limite davantage sans gain de vitesse reel.
+        #
+        # Le vrai goulot d'etranglement mesure: nakanime.tv laisse passer
+        # ~60-100 requetes rapides puis renvoie du 429 (Too Many Requests)
+        # avec un header Retry-After (ex: 29s) sur TOUT le reste des episodes.
+        # Sans le detecter, chaque episode suivant "echoue" en 0.1s puis
+        # attend un backoff bien trop court avant de re-echouer - des
+        # centaines d'echecs rapides qui, cumules, prennent des minutes pour
+        # rien. On respecte maintenant le Retry-After une seule fois des
+        # qu'on le voit, au lieu de le retenter en boucle trop tot.
+        print_status(f"Fetching sources for {len(ep_numbers)} episodes...", "loading")
+        for ep_num in ep_numbers:
             ep_page_url = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/{ep_num}"
+
+            sources = None
             for attempt in range(2):
                 try:
-                    r_page = requests.get(ep_page_url, headers=req_headers, timeout=10)
+                    r_page = session.get(ep_page_url, timeout=10)
+                    if r_page.status_code == 429:
+                        wait_s = int(r_page.headers.get("Retry-After", 30)) + 1
+                        print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
+                        time.sleep(wait_s)
+                        continue
+
                     m_ep_id = re.search(r'data-episode-id=["\'](\d+)["\']', r_page.text)
                     if not m_ep_id:
                         raise ValueError("episode id not found")
                     ep_id = int(m_ep_id.group(1))
 
                     payload = {"anime_id": anime_id, "episode_id": ep_id, "turnstile_token": ""}
-                    r_src = requests.post(url_src, headers={**req_headers, "Content-Type": "application/json"}, json=payload, timeout=10)
+                    r_src = session.post(url_src, headers={"Content-Type": "application/json"}, json=payload, timeout=10)
+                    if r_src.status_code == 429:
+                        wait_s = int(r_src.headers.get("Retry-After", 30)) + 1
+                        print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
+                        time.sleep(wait_s)
+                        continue
                     if r_src.status_code != 200:
                         raise ValueError(f"sources request failed with status {r_src.status_code}")
 
                     dec_src = decode_nakanime_response(r_src.content, path_src)
-                    return ep_num, json.loads(dec_src.decode('utf-8'))
+                    sources = json.loads(dec_src.decode('utf-8'))
+                    break
                 except Exception:
                     if attempt == 0:
-                        time.sleep(1.5)
+                        time.sleep(0.8)
                     continue
-            return ep_num, None
 
-        # Une requete par episode en sequentiel est trop lent sur une longue
-        # saison (300+ episodes) - on parallelise avec un nombre de workers
-        # modere pour rester sous le seuil de rate-limiting du serveur.
-        print_status(f"Fetching sources for {len(ep_numbers)} episodes...", "loading")
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for ep_num, sources in executor.map(fetch_one_episode_sources, ep_numbers):
-                if not sources:
-                    continue
+            if sources:
                 seen_counts = {}
                 for item in sources:
                     host = item.get('host', 'unknown').capitalize()

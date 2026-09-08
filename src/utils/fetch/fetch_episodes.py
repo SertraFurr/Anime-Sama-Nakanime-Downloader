@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from src.var import print_status
 
 cO = "nkapiv1"
@@ -86,14 +87,8 @@ def fetch_nakanime_episodes(base_url, headers=None):
         path_src = "/api/sources/anime"
         url_src = f"https://nakanime.tv{path_src}"
 
-        for ep_num in ep_numbers:
+        def fetch_one_episode_sources(ep_num):
             ep_page_url = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/{ep_num}"
-
-            # Envoyer ~700 requetes sequentielles sans pause declenche du
-            # rate-limiting cote serveur, surtout vers la fin d'une longue
-            # saison - d'ou un petit delai entre chaque episode et une
-            # retentative avant d'abandonner un episode donne.
-            sources = None
             for attempt in range(2):
                 try:
                     r_page = requests.get(ep_page_url, headers=req_headers, timeout=10)
@@ -108,14 +103,21 @@ def fetch_nakanime_episodes(base_url, headers=None):
                         raise ValueError(f"sources request failed with status {r_src.status_code}")
 
                     dec_src = decode_nakanime_response(r_src.content, path_src)
-                    sources = json.loads(dec_src.decode('utf-8'))
-                    break
+                    return ep_num, json.loads(dec_src.decode('utf-8'))
                 except Exception:
                     if attempt == 0:
                         time.sleep(1.5)
                     continue
+            return ep_num, None
 
-            if sources:
+        # Une requete par episode en sequentiel est trop lent sur une longue
+        # saison (300+ episodes) - on parallelise avec un nombre de workers
+        # modere pour rester sous le seuil de rate-limiting du serveur.
+        print_status(f"Fetching sources for {len(ep_numbers)} episodes...", "loading")
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for ep_num, sources in executor.map(fetch_one_episode_sources, ep_numbers):
+                if not sources:
+                    continue
                 seen_counts = {}
                 for item in sources:
                     host = item.get('host', 'unknown').capitalize()
@@ -126,8 +128,6 @@ def fetch_nakanime_episodes(base_url, headers=None):
                     player_key = f"{host} {cnt} ({lang})" if cnt > 1 else base_key
 
                     player_episodes_by_num.setdefault(player_key, {})[ep_num] = item.get('url')
-
-            time.sleep(0.2)
 
         if player_episodes_by_num:
             max_ep_num = max(ep_numbers)

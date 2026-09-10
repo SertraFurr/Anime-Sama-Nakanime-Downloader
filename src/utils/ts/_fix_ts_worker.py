@@ -11,6 +11,16 @@ instead lets the caller enforce a hard timeout and kill it if needed.
 import sys
 import os
 
+# This subprocess's stdout/stderr default to the Windows console codepage
+# (cp1252) rather than UTF-8 when captured by the parent via subprocess.run,
+# which crashes on the emoji used in print_status() (e.g. "⏳"). Force UTF-8
+# before anything else prints.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass  # Python <3.7 fallback: not expected here, but don't crash on it.
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.utils.ts.fix_ts import fix_ts

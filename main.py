@@ -102,15 +102,22 @@ def parse_selection_indices(user_input, count):
     return indices
 
 
-def process_season(base_url, args, headers, interactive, pause_at_end=True):
+def plan_season(base_url, args, headers, interactive):
+    """Asks every interactive question for one season (player, episodes,
+    save path, threading/mp4 choices) and returns a plan dict ready for
+    execute_season_plan() - without downloading anything yet. Split out of
+    the old process_season() so a multi-season run can gather every
+    season's answers upfront, then run all the downloads back to back with
+    no further prompts. Returns None on failure/cancellation, or
+    {"already_done": True} for URLs handled synchronously (scans)."""
     is_valid, error_msg = validate_anime_sama_url(base_url)
     if not is_valid:
         print_status(error_msg, "error")
-        return 1
+        return None
 
     if "/scan" in base_url.lower():
         download_scan(base_url, headers)
-        return 0
+        return {"already_done": True}
 
     anime_name = extract_anime_name(base_url)
     print_status(f"Detected anime: {anime_name}", "info")
@@ -145,7 +152,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     episodes = fetch_episodes(base_url, headers=headers, wanted_episodes=wanted_episodes)
     if not episodes:
         print_status("Failed to fetch episodes.", "error")
-        return 1
+        return None
 
     print_episodes(episodes, wanted_episodes=wanted_episodes)
 
@@ -186,12 +193,12 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
 
         if not player_choice:
             print_status(f"Player '{args.player}' not found.", "error")
-            return 1
+            return None
     else:
         player_choice = get_player_choice(episodes, wanted_episodes=wanted_episodes)
 
     if not player_choice:
-        return 1
+        return None
 
     episode_indices = None
 
@@ -203,9 +210,9 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                 print_status(f"Latest episode selected: Episode {count}", "info")
             else:
                 print_status("No episodes found to select latest.", "error")
-                return 1
+                return None
         else:
-            return 1
+            return None
 
     if not episode_indices:
         if args.episodes:
@@ -224,13 +231,13 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                 episode_indices = parse_selection_indices(args.episodes, len(episodes[player_choice]))
                 if not episode_indices:
                     print_status("Invalid episode list format", "error")
-                    return 1
+                    return None
         else:
              if not args.latest:
                 episode_indices = get_episode_choice(episodes, player_choice)
 
     if episode_indices is None or not episode_indices:
-        return 1
+        return None
 
     get_anime_name = extract_anime_name(base_url)
     if 'nakanime.tv' in base_url.lower() or 'nakanime.fr' in base_url.lower():
@@ -266,7 +273,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
 
     if not episode_indices:
         print_status("No available episodes to download for this player.", "error")
-        return 1
+        return None
 
     urls = [episodes[player_choice][index] for index in episode_indices]
     episode_numbers = [index + 1 for index in episode_indices]
@@ -290,16 +297,18 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     else:
         player_order = [player_choice] + sorted(other_players, key=_speed_sort_key)
 
+    # get_saison_info is "saisonN" (or nakanime's "saisonN") - pull N out so
+    # both the MAL search and the SxxExx episode filenames are season-aware
+    # instead of always assuming season 1.
+    m_season_num = re.search(r'\d+', get_saison_info or "")
+    season_number = int(m_season_num.group()) if m_season_num else None
+
     if not args.no_mal and get_anime_name:
         os.makedirs(save_dir, exist_ok=True)
         alt_names = fetch_alt_titles(base_url, headers=headers)
-        # get_saison_info is "saisonN" (or nakanime's "saisonN") - pull N out
-        # so the MAL search can be season-aware instead of always searching
-        # the bare show name (which silently matches season 1's MAL entry
-        # even when downloading a later season/part, e.g. Fire Force S3).
-        m_season_num = re.search(r'\d+', get_saison_info or "")
-        season_number = int(m_season_num.group()) if m_season_num else None
-        create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
+        # May rename save_dir (tvdb/imdb identification mode tags the folder
+        # name) - every download below must use the returned path.
+        save_dir = create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
 
     print(f"\n{Colors.BOLD}{Colors.HEADER}🎬 PROCESSING EPISODES{Colors.ENDC}")
     print_separator()
@@ -309,7 +318,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     video_sources = fetch_video_source(urls)
     if not video_sources:
         print_status("Could not extract video sources", "error")
-        return 1
+        return None
 
     if isinstance(video_sources, str):
         video_sources = [video_sources]
@@ -353,6 +362,46 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                                 pre_selected_tool = 'ffmpeg'
                                 break
 
+    return {
+        "episodes": episodes,
+        "player_choice": player_choice,
+        "episode_indices": episode_indices,
+        "urls": urls,
+        "episode_numbers": episode_numbers,
+        "player_order": player_order,
+        "get_anime_name": get_anime_name,
+        "save_dir": save_dir,
+        "video_sources": video_sources,
+        "use_threading": use_threading,
+        "use_ts_threading": use_ts_threading,
+        "automatic_mp4": automatic_mp4,
+        "pre_selected_tool": pre_selected_tool,
+        "season_number": season_number,
+        "args": args,
+        "interactive": interactive,
+    }
+
+
+def execute_season_plan(plan, pause_at_end=True):
+    """Runs the actual downloads for one season, given a plan already built
+    by plan_season() - no interactive questions from here on."""
+    episodes = plan["episodes"]
+    player_choice = plan["player_choice"]
+    episode_indices = plan["episode_indices"]
+    urls = plan["urls"]
+    episode_numbers = plan["episode_numbers"]
+    player_order = plan["player_order"]
+    get_anime_name = plan["get_anime_name"]
+    save_dir = plan["save_dir"]
+    video_sources = plan["video_sources"]
+    use_threading = plan["use_threading"]
+    use_ts_threading = plan["use_ts_threading"]
+    automatic_mp4 = plan["automatic_mp4"]
+    pre_selected_tool = plan["pre_selected_tool"]
+    season_number = plan["season_number"]
+    args = plan["args"]
+    interactive = plan["interactive"]
+
     failed_downloads = 0
     try:
         if use_threading and len(episode_indices) > 1:
@@ -385,7 +434,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
             # reverted. Live-tested and confirmed to hang indefinitely.
             with ThreadPoolExecutor() as executor:
                 future_to_episode = {
-                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False, automatic_mp4): ep_num
+                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False, automatic_mp4, season_number): ep_num
                     for ep_num, ep_idx, video_src in zip(episode_numbers, episode_indices, video_sources)
                 }
                 for future in as_completed(future_to_episode):
@@ -427,7 +476,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
                         failed_downloads += 1
         else:
             for episode_num, ep_idx, video_source in zip(episode_numbers, episode_indices, video_sources):
-                success, _ = download_episode_with_fallback(episode_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_source, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, interactive)
+                success, _ = download_episode_with_fallback(episode_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_source, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, interactive, season_number=season_number)
                 if not success: failed_downloads += 1
 
         print_separator()
@@ -446,6 +495,18 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     except Exception as e:
         print_status(f"Error: {e}", "error")
         return 1
+
+
+def process_season(base_url, args, headers, interactive, pause_at_end=True):
+    """Single-season convenience wrapper: plan then immediately execute -
+    same behavior as before the plan/execute split, for callers that only
+    ever handle one season at a time."""
+    plan = plan_season(base_url, args, headers, interactive)
+    if plan is None:
+        return 1
+    if plan.get("already_done"):
+        return 0
+    return execute_season_plan(plan, pause_at_end=pause_at_end)
 
 
 def main():
@@ -671,14 +732,40 @@ def main():
 
         multi = len(season_urls) > 1
         overall_rc = 0
+
+        if not multi:
+            rc = process_season(season_urls[0], args, headers, interactive, pause_at_end=True)
+            return rc if rc != 0 else 0
+
+        # Multi-season: gather every season's answers (player, episodes,
+        # save path, threading/mp4 choices) up front, THEN run every
+        # season's downloads back to back with no further prompts - instead
+        # of interleaving "ask questions" and "download" per season, which
+        # meant coming back every few minutes to answer the next season's
+        # questions.
+        print(f"\n{Colors.BOLD}{Colors.HEADER}=== Configuring {len(season_urls)} seasons ==={Colors.ENDC}")
+        plans = []
         for i, season_url in enumerate(season_urls):
-            if multi:
-                print(f"\n{Colors.BOLD}{Colors.HEADER}=== Saison {i + 1}/{len(season_urls)} ==={Colors.ENDC}")
-            rc = process_season(season_url, args, headers, interactive, pause_at_end=not multi)
+            print(f"\n{Colors.BOLD}{Colors.HEADER}--- Season {i + 1}/{len(season_urls)} configuration ---{Colors.ENDC}")
+            plan = plan_season(season_url, args, headers, interactive)
+            if plan is None:
+                overall_rc = 1
+                continue
+            plans.append(plan)
+
+        if not plans:
+            return 1
+
+        print(f"\n{Colors.BOLD}{Colors.HEADER}=== All seasons configured - starting downloads ==={Colors.ENDC}")
+        for i, plan in enumerate(plans):
+            print(f"\n{Colors.BOLD}{Colors.HEADER}=== Season {i + 1}/{len(plans)} download ==={Colors.ENDC}")
+            if plan.get("already_done"):
+                continue
+            rc = execute_season_plan(plan, pause_at_end=False)
             if rc != 0:
                 overall_rc = 1
 
-        if multi and interactive:
+        if interactive:
             input(f"{Colors.BOLD}Press Enter to exit...{Colors.ENDC}")
 
         return overall_rc

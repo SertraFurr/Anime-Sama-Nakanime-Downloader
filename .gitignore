@@ -52,3 +52,7 @@ env/
 
 # videos file
 videos/
+
+# Local runtime config (Cloudflare cookie, TVDB API key, save-path/
+# identification settings) - personal, contains secrets, never commit.
+src/utils/config/config.json

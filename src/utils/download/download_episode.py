@@ -7,11 +7,127 @@ from src.var                            import print_separator, print_status, Co
 from src.utils.download.download_video  import download_video
 from src.utils.ts.convert_ts_to_mp4     import convert_ts_to_mp4
 from src.utils.download.verify_video_file import verify_or_warn
+from src.utils.config.config            import get_setting
 import time
+
+# Caches which season directories have already been tagged with an external
+# id this run, so a threaded batch (many episodes of the same season) only
+# prompts once instead of once per episode - same pattern as _mal_search_cache.
+_external_id_cache = {}
+_external_id_cache_lock = threading.Lock()
 
 PREFIX_URL = "https://myanimelist.net/search/prefix.json"
 TENRAI_EPISODES_URL = "https://api.tenrai.org/v1/anime/{id}/episodes?page={page}"
 TENRAI_DETAILS_URL = "https://api.tenrai.org/v1/anime/{id}"
+
+# IMDb's own site uses this endpoint for its search-box autocomplete - no
+# API key needed, unlike TheTVDB (whose real search API requires auth with
+# no free keyless equivalent). Returns JSONP: "imdb$query({...json...})".
+IMDB_SUGGEST_URL = "https://sg.media-imdb.com/suggests/{first_letter}/{query}.json"
+
+
+def _search_imdb(query, timeout=10):
+    """Search IMDb's keyless autocomplete endpoint. Returns a list of
+    {id, title, year, type} candidates (TV series preferred first), or []
+    on failure/no results."""
+    import json as _json
+    slug = re.sub(r'[^a-z0-9]+', '_', query.lower()).strip('_')
+    if not slug:
+        return []
+    first_letter = slug[0]
+    url = IMDB_SUGGEST_URL.format(first_letter=first_letter, query=slug)
+    try:
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        # Strip the "imdb$query(...)" JSONP wrapper to get raw JSON. The
+        # prefix isn't reliably \w-only - it can echo the query with literal
+        # "%20"/other punctuation in it (e.g. "imdb$saga_of%20tanya..."), so
+        # match on the first "(" / last ")" instead of anchoring the prefix.
+        text = resp.text.strip()
+        start, end = text.find('('), text.rfind(')')
+        if start == -1 or end == -1 or end <= start:
+            return []
+        data = _json.loads(text[start + 1:end])
+        candidates = []
+        for item in data.get("d", []):
+            if "id" not in item or not item["id"].startswith("tt"):
+                continue  # skip person (nm...) entries
+            candidates.append({
+                "id": item["id"],
+                "title": item.get("l", "?"),
+                "year": item.get("y") or item.get("yr", ""),
+                "type": item.get("q", ""),
+            })
+        # TV series (incl. mini-series) first - most relevant for anime.
+        candidates.sort(key=lambda c: 0 if "series" in c["type"].lower() else 1)
+        return candidates
+    except Exception:
+        return []
+
+
+# TheTVDB v4 API - unlike IMDb's suggest endpoint, this genuinely requires a
+# free API key (register at https://thetvdb.com/api-information to get one,
+# then set it in Settings > Change Plex Identification Method). The key
+# itself is exchanged for a short-lived bearer token via /login, cached here
+# for the rest of the run so we don't re-login on every search.
+TVDB_LOGIN_URL = "https://api4.thetvdb.com/v4/login"
+TVDB_SEARCH_URL = "https://api4.thetvdb.com/v4/search"
+
+_tvdb_token = None
+_tvdb_token_lock = threading.Lock()
+
+
+def _get_tvdb_token(api_key, timeout=10):
+    global _tvdb_token
+    with _tvdb_token_lock:
+        if _tvdb_token:
+            return _tvdb_token
+        try:
+            resp = requests.post(TVDB_LOGIN_URL, json={"apikey": api_key}, timeout=timeout)
+            resp.raise_for_status()
+            _tvdb_token = resp.json()["data"]["token"]
+            return _tvdb_token
+        except Exception as e:
+            print_status(f"TVDB login failed (check your API key in Settings): {e}", "error")
+            return None
+
+
+def _search_tvdb(query, timeout=10):
+    """Search TheTVDB v4 API. Requires a free API key configured via
+    Settings (get one at https://thetvdb.com/api-information). Returns a
+    list of {id, title, year, type} candidates, or [] on failure/no key."""
+    api_key = get_setting("tvdb_api_key")
+    if not api_key:
+        return []
+    token = _get_tvdb_token(api_key)
+    if not token:
+        return []
+    try:
+        resp = requests.get(
+            TVDB_SEARCH_URL,
+            params={"query": query, "type": "series"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        candidates = []
+        for item in data:
+            # "name" is the show's primary/original-language title (often
+            # Japanese for anime, e.g. "幼女戦記") - prefer the English
+            # translation when TVDB has one, only falling back to "name".
+            eng_title = item.get("translations", {}).get("eng")
+            candidates.append({
+                "id": item.get("tvdb_id") or item.get("id"),
+                "title": eng_title or item.get("name", "?"),
+                "year": item.get("year", ""),
+                "type": item.get("type", "series"),
+            })
+        return candidates
+    except Exception as e:
+        print_status(f"TVDB search failed: {e}", "error")
+        return []
+
 
 _mal_search_cache = {}
 _cache_lock = threading.Lock()
@@ -368,21 +484,149 @@ def search_anime_on_mal(anime_name, interactive=True, alt_names=None, season_num
         _mal_search_cache[cache_key] = result
         return result
 
+_TAG_PATTERN = re.compile(r'\s*\[(tvdb|imdbid)-[\w]+\]\s*$')
+_VALID_TAG = re.compile(r'^(tvdb-\w+|imdbid-tt\d+)$', re.IGNORECASE)
+
+
+def _tag_dir_with_external_id(save_dir, anime_name, interactive):
+    """Identify the show to Plex's TheTVDB/IMDb-based agents by appending a
+    "[tvdb-XXXX]" or "[imdbid-ttXXXXXXX]" tag to the SHOW's root folder name
+    (save_dir's parent - not the season subfolder itself), instead of
+    writing a MyAnimeList .match file. Those agents assign one identity per
+    show, derived from the top-level folder, same as MyAnimeList.bundle's
+    own .match resolution - tagging a season subfolder instead would do
+    nothing. TVDB and IMDb are one combined "external" mode - which one
+    applies is picked per-anime at the prompt (typing the tag directly)
+    rather than as a separate persistent setting.
+    Returns the season directory to keep using for this episode's save path
+    (adjusted to sit under the renamed root, if a rename happened)."""
+    root_cache_key = (anime_name or "").lower().strip()
+    season_basename = os.path.basename(save_dir.rstrip("\\/"))
+    root_dir = os.path.dirname(save_dir.rstrip("\\/"))
+
+    with _external_id_cache_lock:
+        if root_cache_key in _external_id_cache:
+            new_root = _external_id_cache[root_cache_key]
+            return os.path.join(new_root, season_basename)
+
+        root_basename = os.path.basename(root_dir)
+        if _TAG_PATTERN.search(root_basename):
+            _external_id_cache[root_cache_key] = root_dir
+            return save_dir
+
+        if not interactive:
+            print_status(
+                f"Non-interactive run: skipping id tagging for '{anime_name}' "
+                f"(rename the show's root folder by hand with a [tvdb-XXXX] or [imdbid-ttXXXXXXX] suffix, "
+                f"or run interactively once).",
+                "warning",
+            )
+            _external_id_cache[root_cache_key] = root_dir
+            return save_dir
+
+        print_separator()
+        has_tvdb_key = bool(get_setting("tvdb_api_key"))
+
+        tvdb_candidates = []
+        if has_tvdb_key:
+            print_status(f"Searching TVDB for: {anime_name}", "info")
+            tvdb_candidates = [dict(c, source="tvdb") for c in _search_tvdb(anime_name)]
+
+        print_status(f"Searching IMDb for: {anime_name}", "info")
+        imdb_candidates = [dict(c, source="imdb") for c in _search_imdb(anime_name)]
+
+        candidates = tvdb_candidates + imdb_candidates
+
+        raw_tag = ""
+        if candidates:
+            print(f"{Colors.BOLD}{Colors.HEADER}Results for '{anime_name}':{Colors.ENDC}")
+            for i, c in enumerate(candidates[:15]):
+                year_str = f", {c['year']}" if c['year'] else ""
+                src_label = "TVDB" if c["source"] == "tvdb" else "IMDb"
+                print(f"{Colors.OKCYAN}  [{i}] {c['title']} ({c['type']}{year_str}) - {src_label} {c['id']}{Colors.ENDC}")
+            try:
+                choice = input(
+                    f"{Colors.BOLD}Select index, or type a tag directly ('tvdb-XXXX'/'imdbid-ttXXXXXXX'), "
+                    f"or blank to skip: {Colors.ENDC}"
+                ).strip()
+            except EOFError:
+                choice = ""
+            if choice.isdigit() and 0 <= int(choice) < len(candidates[:15]):
+                picked = candidates[int(choice)]
+                raw_tag = f"tvdb-{picked['id']}" if picked["source"] == "tvdb" else f"imdbid-{picked['id']}"
+            else:
+                raw_tag = choice
+        else:
+            hint = "" if has_tvdb_key else " (add a free TVDB API key in Settings for TVDB results too)"
+            print_status(f"No results found{hint} - type a tag manually.", "warning")
+            try:
+                raw_tag = input(
+                    f"{Colors.BOLD}Enter tag for '{anime_name}' - "
+                    f"'tvdb-XXXX' or 'imdbid-ttXXXXXXX' (blank to skip): {Colors.ENDC}"
+                ).strip()
+            except EOFError:
+                raw_tag = ""
+
+        if not raw_tag:
+            print_status(f"No tag given, leaving folder untagged for '{anime_name}'", "warning")
+            _external_id_cache[root_cache_key] = root_dir
+            return save_dir
+
+        if not _VALID_TAG.match(raw_tag):
+            print_status(
+                f"'{raw_tag}' doesn't look like 'tvdb-XXXX' or 'imdbid-ttXXXXXXX' - leaving folder untagged.",
+                "error",
+            )
+            _external_id_cache[root_cache_key] = root_dir
+            return save_dir
+
+        grandparent = os.path.dirname(root_dir)
+        new_root = os.path.join(grandparent, f"{root_basename} [{raw_tag}]")
+
+        try:
+            if os.path.exists(root_dir) and not os.path.exists(new_root):
+                # Renaming the show's root moves its whole season subtree
+                # with it - save_dir doesn't need moving separately.
+                os.rename(root_dir, new_root)
+            else:
+                os.makedirs(new_root, exist_ok=True)
+            print_status(f"Tagged show directory: {new_root}", "success")
+            _external_id_cache[root_cache_key] = new_root
+            return os.path.join(new_root, season_basename)
+        except Exception as e:
+            print_status(f"Failed to tag directory: {e}", "error")
+            _external_id_cache[root_cache_key] = root_dir
+            return save_dir
+
+
 def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None):
+    """Identifies save_dir to Plex, either via a MyAnimeList .match file or
+    (per the 'identification_mode' setting) an external-id folder tag.
+    Returns the directory to use for saving this episode's file - callers
+    must use the returned value, since tagging can rename save_dir."""
+    identification_mode = get_setting('identification_mode', 'mal')
+
+    if identification_mode == "external":
+        if not anime_name:
+            print_status("Cannot tag directory: anime_name is empty", "error")
+            return save_dir
+        return _tag_dir_with_external_id(save_dir, anime_name, interactive)
+
+    cache_key = f"{(anime_name or '').lower().strip()}::s{season_number or 1}"
+
     with _cache_lock:
         try:
             if not anime_name:
                 print_status("Cannot create match file: anime_name is empty", "error")
-                return
+                return save_dir
 
             match_file_path = os.path.join(save_dir, '.match')
-            cache_key = f"{anime_name.lower().strip()}::s{season_number or 1}"
-            
+
             if cache_key in _mal_search_cache:
                 if cache_key not in _mal_cache_hit_announced:
                     _mal_cache_hit_announced.add(cache_key)
                     print_status(f"Using cached MAL data (already in memory)", "info")
-                return
+                return save_dir
             
             # Multi-part case leaves save_dir itself without a .match (files
             # get manually sorted into the sibling "Part" folders instead) -
@@ -391,7 +635,7 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
                 if cache_key not in _mal_cache_hit_announced:
                     _mal_cache_hit_announced.add(cache_key)
                     print_status(f"Multi-part match folders already exist for: {save_dir}", "info")
-                return
+                return save_dir
 
             if os.path.exists(match_file_path):
                 print_status(f"Match file already exists: {match_file_path}", "info")
@@ -421,8 +665,8 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
                 except Exception as e:
                     print_status(f"Could not read existing match file: {e}", "warning")
                     _mal_search_cache[cache_key] = None
-                
-                return
+
+                return save_dir
             
             print_separator()
             print(f"{Colors.BOLD}{Colors.HEADER}🔍 Searching for anime on MyAnimeList...{Colors.ENDC}")
@@ -448,7 +692,7 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
                     "warning",
                 )
                 print_separator()
-                return
+                return save_dir
 
             if mal_data:
                 with open(match_file_path, 'w', encoding='utf-8') as match_file:
@@ -470,9 +714,12 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
                 print_status(f"Match file created with default values: {match_file_path}", "warning")
                 print_status(f"Could not find or match anime on MAL", "warning")
                 print_separator()
-                
+
+            return save_dir
+
         except Exception as e:
             print_status(f"Error creating match file: {str(e)}", "error")
+            return save_dir
 
 
 def convert_episode_ts_to_mp4(episode_num, ts_path, pre_selected_tool=None):
@@ -485,18 +732,24 @@ def convert_episode_ts_to_mp4(episode_num, ts_path, pre_selected_tool=None):
         print_status(f"Conversion failed for episode {episode_num}, keeping .ts file: {ts_path}", "error")
         return False, ts_path
 
+    # Verify the .mp4 BEFORE deleting the .ts - if conversion silently
+    # produced a corrupted file (seen with "Invalid data found when
+    # processing input"), the .ts is still the only good copy and must not
+    # be thrown away.
+    if not verify_or_warn(final_path, episode_num):
+        print_status(f"Keeping .ts file for episode {episode_num} since the .mp4 failed verification: {ts_path}", "warning")
+        return False, final_path
+
     try:
         os.remove(ts_path)
         removed_note = f"\n{Colors.OKBLUE}ℹ️ Removed temporary .ts file: {ts_path}{Colors.ENDC}"
     except Exception as e:
         removed_note = f"\n{Colors.WARNING}⚠️ Could not remove temporary .ts file: {str(e)}{Colors.ENDC}"
     tqdm.write(f"{Colors.OKGREEN}✅ Episode {episode_num} successfully saved to: {final_path}{Colors.ENDC}{removed_note}")
-    if not verify_or_warn(final_path, episode_num):
-        return False, final_path
     return True, final_path
 
 
-def download_episode(episode_num, url, video_source, anime_name, save_dir, use_ts_threading=False, automatic_mp4=False, pre_selected_tool=None, no_mal=False, interactive=True, defer_conversion=False):
+def download_episode(episode_num, url, video_source, anime_name, save_dir, use_ts_threading=False, automatic_mp4=False, pre_selected_tool=None, no_mal=False, interactive=True, defer_conversion=False, season_number=None):
     if not video_source:
         print_status(f"Could not extract video source for episode {episode_num}", "error")
         return False, None
@@ -509,9 +762,27 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
     elif not anime_name:
         print_status("anime_name is empty, skipping MAL matching", "warning")
     else:
-        create_match_file(season_dir, anime_name, interactive=interactive)
+        # create_match_file() can rename season_dir (tagging it with a
+        # [tvdb-XXXX]/[imdbid-XXXX] folder tag in tvdb/imdb identification
+        # mode) - use its returned path for everything from here on so the
+        # actual video file lands in the (possibly renamed) directory.
+        season_dir = create_match_file(season_dir, anime_name, interactive=interactive)
 
-    save_path = os.path.join(season_dir, f"{anime_name if anime_name else 'episode'}_{episode_num}.mp4")
+    # SxxExx naming instead of the old generic "{anime}_{N}.mp4" - Plex's
+    # own scanner and Sonarr both need that pattern to reliably recognize
+    # episode numbers; the generic form was silently going undetected for a
+    # large chunk of the library (bulk-fixed by hand once already).
+    try:
+        episode_int = int(episode_num)
+    except (TypeError, ValueError):
+        episode_int = None
+    season_int = season_number if season_number else 1
+    safe_anime_name = re.sub(r'[:"/\\|?*<>]', '', anime_name) if anime_name else 'episode'
+    if episode_int is not None:
+        filename = f"{safe_anime_name} - S{season_int:02d}E{episode_int:02d}.mp4"
+    else:
+        filename = f"{safe_anime_name}_{episode_num}.mp4"
+    save_path = os.path.join(season_dir, filename)
 
     # Batched into a single print() call: when several episodes download in
     # parallel threads, each separate print()/print_status() call is its own

@@ -78,14 +78,18 @@ def get_player_choice(episodes, wanted_episodes=None):
     
     while True:
         try:
-            choice = input(f"\n{Colors.BOLD}Enter player number (1-{len(available_players)}) or type player name: {Colors.ENDC}").strip()
-            
+            choice = input(f"\n{Colors.BOLD}Enter player number (1-{len(available_players)}, 0 to cancel) or type player name: {Colors.ENDC}").strip()
+
+            if choice == "0":
+                print_status("Cancelled by user", "warning")
+                return None
+
             if choice.isdigit():
                 choice_idx = int(choice) - 1
                 if 0 <= choice_idx < len(available_players):
                     return available_players[choice_idx]
                 else:
-                    print_status(f"Please enter a number between 1 and {len(available_players)}", "error")
+                    print_status(f"Please enter a number between 0 and {len(available_players)}", "error")
             else:
                 player_input = choice.lower()
                 if player_input.isdigit():

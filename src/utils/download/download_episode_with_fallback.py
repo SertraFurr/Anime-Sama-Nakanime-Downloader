@@ -5,7 +5,8 @@ from src.utils.download.download_episode         import download_episode
 
 def download_episode_with_fallback(episode_num, episode_index, episodes, player_order, anime_name, save_dir,
                                     primary_video_source=None, use_ts_threading=False, automatic_mp4=False,
-                                    pre_selected_tool=None, no_mal=False, interactive=True, defer_conversion=False):
+                                    pre_selected_tool=None, no_mal=False, interactive=True, defer_conversion=False,
+                                    season_number=None):
     for i, player in enumerate(player_order):
         urls_for_player = episodes.get(player)
         if not urls_for_player or episode_index >= len(urls_for_player):
@@ -28,7 +29,7 @@ def download_episode_with_fallback(episode_num, episode_index, episodes, player_
 
         success, output_path = download_episode(episode_num, url, video_source, anime_name, save_dir,
                                                   use_ts_threading, automatic_mp4, pre_selected_tool, no_mal, interactive,
-                                                  defer_conversion=defer_conversion)
+                                                  defer_conversion=defer_conversion, season_number=season_number)
         if success:
             return True, output_path
 

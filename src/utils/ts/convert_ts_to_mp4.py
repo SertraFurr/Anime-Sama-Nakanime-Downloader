@@ -1,7 +1,31 @@
 import subprocess
 import os
+import sys
 from src.var        import print_status
-from src.utils.ts.fix_ts import fix_ts
+
+_FIX_TS_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_fix_ts_worker.py")
+_FIX_TS_TIMEOUT = 180
+
+
+def _run_fix_ts_with_timeout(input_path, output_path, timeout=_FIX_TS_TIMEOUT):
+    """Run fix_ts() in a separate process with a hard timeout.
+
+    fix_ts() (PyAV) has been observed to hang indefinitely on certain input
+    files with the CPU sitting at 0% - a block inside the native av library
+    itself, which a Python thread cannot be interrupted out of. A
+    subprocess CAN be killed outright, so that's what enforces the limit.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, _FIX_TS_WORKER, input_path, output_path],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"fix_ts timed out after {timeout}s (likely stuck in PyAV) - {input_path}")
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "fix_ts subprocess failed")
 
 def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
     if not os.path.exists(input_path):
@@ -49,7 +73,7 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
     
     elif pre_selected_tool == 'av':
         try:
-            fix_ts(input_path, output_path)
+            _run_fix_ts_with_timeout(input_path, output_path)
             print_status(f"Video converted successfully to {output_path}", "success")
             return True, output_path
         except Exception as e:

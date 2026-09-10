@@ -55,7 +55,7 @@ from src.utils.check.check_ffmpeg_installed     import check_ffmpeg_installed
 from src.utils.validate_anime_sama_url          import validate_anime_sama_url
 from src.utils.extract.extract_anime_name       import extract_anime_name
 from src.utils.get.get_save_directory           import get_save_directory, format_save_path
-from src.utils.download.download_episode        import download_episode, create_match_file
+from src.utils.download.download_episode        import download_episode, create_match_file, convert_episode_ts_to_mp4
 from src.utils.fetch.fetch_alt_titles           import fetch_alt_titles
 from src.utils.download.download_episode_with_fallback import download_episode_with_fallback
 from src.utils.search.search_anime              import search_anime
@@ -279,7 +279,7 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     # a fichier unique (Sibnet, Sendvid) - sinon un fallback silencieux vers
     # Sibnet fait perdre tout le gain de vitesse du choix initial.
     def _speed_sort_key(p):
-        return 0 if is_fast_player(p) else 1
+        return 0 if is_fast_player(p, episodes.get(p)) else 1
 
     chosen_lang = _player_lang(player_choice)
     other_players = [p for p in episodes.keys() if p != player_choice]
@@ -293,7 +293,13 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     if not args.no_mal and get_anime_name:
         os.makedirs(save_dir, exist_ok=True)
         alt_names = fetch_alt_titles(base_url, headers=headers)
-        create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names)
+        # get_saison_info is "saisonN" (or nakanime's "saisonN") - pull N out
+        # so the MAL search can be season-aware instead of always searching
+        # the bare show name (which silently matches season 1's MAL entry
+        # even when downloading a later season/part, e.g. Fire Force S3).
+        m_season_num = re.search(r'\d+', get_saison_info or "")
+        season_number = int(m_season_num.group()) if m_season_num else None
+        create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
 
     print(f"\n{Colors.BOLD}{Colors.HEADER}🎬 PROCESSING EPISODES{Colors.ENDC}")
     print_separator()
@@ -318,7 +324,13 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
             thread_choice = input(f"{Colors.BOLD}Download all episodes simultaneously? (t/1/y = yes / s = no): {Colors.ENDC}").strip().lower()
             use_threading = thread_choice in ['t', 'threaded', '1', 'y', 'yes']
 
-        if any('m3u8' in src for src in video_sources if src):
+        # Only checking the chosen player's own video_sources misses the case
+        # where it fails per-episode and download_episode_with_fallback()
+        # switches to a different (segmented/m3u8) player - the ts-threading
+        # and mp4-conversion questions would then silently never get asked,
+        # even though the fallback player ends up needing them.
+        any_fallback_is_fast = any(is_fast_player(p, episodes.get(p)) for p in player_order)
+        if any_fallback_is_fast or any('m3u8' in src for src in video_sources if src):
             if use_threading:
                 print_status("Using threading with M3U8.", "warning")
 
@@ -345,6 +357,8 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
     try:
         if use_threading and len(episode_indices) > 1:
             print_status("Starting threaded downloads...", "info")
+            from src.utils.download.download_video import set_batch_size
+            set_batch_size(len(episode_indices))
             # Once inside a threaded batch, no per-episode question should
             # ever hit the terminal again - the batch-level choices already
             # made (use_ts_threading, automatic_mp4) cover it, and letting
@@ -353,18 +367,63 @@ def process_season(base_url, args, headers, interactive, pause_at_end=True):
             # producing the repeated, garbled "Threaded Download Option"
             # prompts interleaved with progress bars). Forcing
             # interactive=False here makes it silently default instead.
+            # Downloads and conversions are split into two separate phases
+            # instead of each episode converting right after its own
+            # download finishes. Converting mid-batch meant its (occasional
+            # but still live-terminal) output was printed while OTHER
+            # episodes' download bars were still actively redrawing -
+            # mixing those broke the bars' terminal positioning and
+            # produced garbled output. Running every download to
+            # completion first (bars visible throughout, no other prints
+            # happening) then every conversion afterward (bars gone, only
+            # plain text) keeps both phases clean.
+            to_convert = []  # (ep_num, ts_path)
+            # Tried registering tqdm's shared lock in every worker thread
+            # here (tqdm's documented fix for multi-threaded bar corruption)
+            # but it deadlocked once episodes' nested per-segment executor
+            # threads (in download_video.py) also touched that same lock -
+            # reverted. Live-tested and confirmed to hang indefinitely.
             with ThreadPoolExecutor() as executor:
                 future_to_episode = {
-                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False): ep_num
+                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False, automatic_mp4): ep_num
                     for ep_num, ep_idx, video_src in zip(episode_numbers, episode_indices, video_sources)
                 }
                 for future in as_completed(future_to_episode):
                     ep_num = future_to_episode[future]
                     try:
-                        success, _ = future.result()
-                        if not success: failed_downloads += 1
+                        success, output_path = future.result()
+                        if not success:
+                            failed_downloads += 1
+                        elif automatic_mp4 and output_path and output_path.endswith('.ts'):
+                            to_convert.append((ep_num, output_path))
                     except Exception as e:
                         print_status(f"Error ep {ep_num}: {e}", "error")
+                        failed_downloads += 1
+
+            total_episodes = len(episode_indices)
+            downloaded_count = total_episodes - failed_downloads
+            print_status(f"✅ {downloaded_count}/{total_episodes} episode(s) downloaded", "success")
+
+            if to_convert:
+                print_separator()
+                print_status(f"🎬 Conversion .ts → .mp4 ({len(to_convert)} episode(s))", "info")
+                print_separator()
+                # Live-tested: converting these files one at a time takes
+                # ~8-9s each, but running several PyAV conversions
+                # concurrently made the whole batch take 10+ minutes with
+                # almost no CPU progress. Each conversion reads its whole
+                # multi-hundred-MB .ts file via av.open() with a large
+                # probesize/analyzeduration - several of those happening at
+                # once thrashes a spinning disk into near-random-access
+                # territory instead of the fast sequential read a single
+                # conversion gets, which dwarfs any benefit from
+                # parallelism. Converting sequentially instead.
+                for ep_num, ts_path in to_convert:
+                    try:
+                        success, _ = convert_episode_ts_to_mp4(ep_num, ts_path, pre_selected_tool)
+                        if not success: failed_downloads += 1
+                    except Exception as e:
+                        print_status(f"Error converting ep {ep_num}: {e}", "error")
                         failed_downloads += 1
         else:
             for episode_num, ep_idx, video_source in zip(episode_numbers, episode_indices, video_sources):

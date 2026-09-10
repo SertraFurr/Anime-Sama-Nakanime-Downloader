@@ -9,32 +9,46 @@ from concurrent.futures                 import ThreadPoolExecutor, as_completed
 
 from src.var                            import Colors, print_status, DEFAULT_USER_AGENT
 from src.utils.parse.parse_ts_segments  import parse_ts_segments
+from src.utils.tqdm_position             import TqdmPosition as _TqdmPosition
 
-# Assigns each concurrent episode download its own terminal line (tqdm's
-# `position`) instead of letting them all draw over line 0 - without this,
-# several episodes downloading in parallel (batch threaded mode) produce a
-# garbled, overlapping progress display. Positions are released and reused
-# once a download finishes instead of growing unbounded.
-_position_lock = threading.Lock()
-_positions_in_use = set()
+# In batch mode (several episodes downloading in parallel), printing
+# anything per-episode - even one line per completion - while OTHER
+# episodes' download bars are still actively redrawing corrupts the
+# terminal display (the bars' cursor-position math gets thrown off by
+# unrelated output landing mid-redraw, and the bars themselves fight over
+# position at high concurrency regardless). So in batch mode nothing is
+# printed per episode at all, live bars are disabled too, and completion
+# is tracked silently - the caller prints one summary line once the whole
+# batch (every bar/episode) is done, via get_batch_progress().
+_batch_lock = threading.Lock()
+_batch_total = 0
+_batch_done = 0
 
 
-class _TqdmPosition:
-    def __enter__(self):
-        with _position_lock:
-            pos = 0
-            while pos in _positions_in_use:
-                pos += 1
-            _positions_in_use.add(pos)
-            self.pos = pos
-        return self.pos
+def set_batch_size(total):
+    """Call once before starting a batch of parallel downloads."""
+    global _batch_total, _batch_done
+    with _batch_lock:
+        _batch_total = total
+        _batch_done = 0
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        with _position_lock:
-            _positions_in_use.discard(self.pos)
+
+def get_batch_progress():
+    with _batch_lock:
+        return _batch_done, _batch_total
+
+
+def _report_episode_done(label):
+    global _batch_done
+    with _batch_lock:
+        _batch_done += 1
+        total = _batch_total
+    if not total:
+        print_status(f"{label} assembled", "success")
 
 def download_video(video_url, save_path, use_ts_threading=False, url='',automatic_mp4=False, threaded_mp4=False, interactive=True):
-    print_status(f"Starting download: {os.path.basename(save_path)}", "loading")
+    # "Starting download" is printed by the caller (download_episode.py) as
+    # part of its single atomic per-episode header block, not here.
     ua = DEFAULT_USER_AGENT
 
     target = url if url else video_url
@@ -139,7 +153,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
 
             if automatic_mp4 is False and use_ts_threading is False:
                 if interactive:
-                    print(f"\n{Colors.BOLD}{Colors.OKCYAN}Threaded Download Option{Colors.ENDC}")
+                    tqdm.write(f"\n{Colors.BOLD}{Colors.OKCYAN}Threaded Download Option{Colors.ENDC}")
                     print_status("Threaded downloading is faster but should not be used on weak Wi-Fi.", "info")
                     use_threads = input(f"{Colors.BOLD}Use threaded download for faster performance? (y/n, default: n): {Colors.ENDC}").strip().lower()
                     use_threads = use_threads in ['y', 'yes', '1']
@@ -196,8 +210,10 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                                 else:
                                     print_status(f"Failed to download segment {i+1}: {str(e)}", "error")
                                     return False, None
-            
-            print_status(f"Combined {len(segments)} segments into {temp_ts_path}", "success")
+
+            if _batch_total == 0:
+                print_status(f"Combined {len(segments)} segments into {temp_ts_path}", "success")
+            _report_episode_done(random_string)
             return True, temp_ts_path
         else:
             response = requests.get(video_url, stream=True, headers=headers, timeout=30)
@@ -208,7 +224,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                 return False, None
             
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            
+
             with open(save_path, 'wb') as f:
                 with tqdm(
                     total=total_size,
@@ -223,8 +239,10 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                         if chunk:
                             f.write(chunk)
                             pbar.update(len(chunk))
-            
-            print_status(f"Download completed successfully!", "success")
+
+            if _batch_total == 0:
+                print_status(f"Download completed successfully!", "success")
+            _report_episode_done(os.path.basename(save_path))
             return True, save_path
     except Exception as e:
         print_status(f"Download failed: {str(e)}", "error")

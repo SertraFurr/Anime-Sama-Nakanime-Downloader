@@ -1,4 +1,5 @@
 import random
+from tqdm import tqdm
 
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -20,6 +21,11 @@ class SourceDomains:
         "luluvdo": ("LuluStream", ["luluvdo.com", "lulustream.com", "lulu"]),
         "vidzy": ("Vidzy", ["vidzy.live", "vidzy.org", "vidzy"]),
         "nakanime": ("Nakanime", ["nakanime.tv", "nakanime.fr", "nakanime"]),
+        # VidHide player software (jwplayer + HLS/m3u8) - seen mirrored under
+        # rotating domain names that don't contain "vidhide" at all (e.g.
+        # minochinos.com); identified by the "/vidhide/..." asset paths in
+        # the embed page itself rather than the domain.
+        "vidhide": ("VidHide", ["minochinos.com", "vidhide"]),
     }
 
     ONEUPLOAD = _SOURCES["oneupload"][1]
@@ -154,20 +160,27 @@ def print_tutorial():
     print(tutorial)
 
 def print_separator(char="─", length=65, title=""):
+    # tqdm.write() (not print()) so this coordinates with any active tqdm
+    # progress bars - it clears them, writes the line, then redraws them,
+    # instead of writing straight to the terminal and visually colliding
+    # with a bar mid-redraw (which plain print() does, even though the
+    # underlying write itself is atomic).
     if title:
         title_str = f"  {title}  "
         side = max(0, (length - len(title_str)) // 2)
         line = char * side + title_str + char * (length - side - len(title_str))
-        print(f"{Colors.OKBLUE}{Colors.BOLD}{line}{Colors.ENDC}")
+        tqdm.write(f"{Colors.OKBLUE}{Colors.BOLD}{line}{Colors.ENDC}")
     else:
-        print(f"{Colors.OKBLUE}{char * length}{Colors.ENDC}")
+        tqdm.write(f"{Colors.OKBLUE}{char * length}{Colors.ENDC}")
 
 def print_section(title, emoji=""):
     label = f" {emoji}  {title} " if emoji else f" {title} "
     border = "─" * (len(label) + 2)
-    print(f"\n{Colors.BOLD}{Colors.HEADER}┌{border}┐")
-    print(f"│ {label} │")
-    print(f"└{border}┘{Colors.ENDC}")
+    tqdm.write(
+        f"\n{Colors.BOLD}{Colors.HEADER}┌{border}┐\n"
+        f"│ {label} │\n"
+        f"└{border}┘{Colors.ENDC}"
+    )
 
 def print_status(message, status_type="info"):
     icons = {
@@ -186,4 +199,4 @@ def print_status(message, status_type="info"):
     }
     icon  = icons.get(status_type, "ℹ️ ")
     color = colors.get(status_type, Colors.OKBLUE)
-    print(f"{color}{icon}{message}{Colors.ENDC}")
+    tqdm.write(f"{color}{icon}{message}{Colors.ENDC}")

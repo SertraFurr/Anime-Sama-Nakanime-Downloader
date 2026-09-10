@@ -1,4 +1,5 @@
 from src.var import Colors, print_separator, SourceDomains
+from src.utils.get.get_player_choice import _speed_hint
 
 def print_episodes(episodes, wanted_episodes=None):
     SOURCE_CONFIG = {
@@ -40,7 +41,9 @@ def print_episodes(episodes, wanted_episodes=None):
     print_separator("=")
     
     for category, urls in episodes.items():
-        print(f"\n{Colors.BOLD}{Colors.OKCYAN}🎮 {category}:{Colors.ENDC} ({len(urls)} episodes)")
+        speed_hint = _speed_hint(category, urls)
+        speed_suffix = f" [{speed_hint}{Colors.OKCYAN}]" if speed_hint else ""
+        print(f"\n{Colors.BOLD}{Colors.OKCYAN}🎮 {category}:{Colors.ENDC} ({len(urls)} episodes){speed_suffix}")
         print_separator("─", 40)
 
         for i, url in enumerate(urls, start=1):

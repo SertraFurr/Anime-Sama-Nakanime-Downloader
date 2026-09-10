@@ -1,7 +1,33 @@
 import subprocess
 import os
+import sys
 from src.var        import print_status
-from src.utils.ts.fix_ts import fix_ts
+
+_FIX_TS_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_fix_ts_worker.py")
+_FIX_TS_TIMEOUT = 180
+
+
+def _run_fix_ts_with_timeout(input_path, output_path, timeout=_FIX_TS_TIMEOUT):
+    """Run fix_ts() in a separate process with a hard timeout.
+
+    fix_ts() (PyAV) has been observed to hang indefinitely on certain input
+    files with the CPU sitting at 0% - a block inside the native av library
+    itself, which a Python thread cannot be interrupted out of. A
+    subprocess CAN be killed outright, so that's what enforces the limit.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, _FIX_TS_WORKER, input_path, output_path],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"fix_ts timed out after {timeout}s (likely stuck in PyAV) - {input_path}")
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "fix_ts subprocess failed")
 
 def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
     if not os.path.exists(input_path):
@@ -19,24 +45,16 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
 
             output_path = os.path.splitext(input_path)[0] + '.mp4'
             ffmpeg_cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostats",
             "-i", input_path,
             "-c:v", "copy",
             "-c:a", "copy",
             output_path
         ]
-            print_status(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}", "info")
-            process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            for line in process.stdout:
-                print(line, end='')
-            process.wait()
+            print_status(f"Converting with FFmpeg: {os.path.basename(input_path)}", "loading")
+            process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if process.stderr.strip():
+                print_status(process.stderr.strip(), "warning")
             if process.returncode == 0:
                 print_status(f"Video converted successfully to {output_path}", "success")
                 return True, output_path
@@ -49,7 +67,7 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
     
     elif pre_selected_tool == 'av':
         try:
-            fix_ts(input_path, output_path)
+            _run_fix_ts_with_timeout(input_path, output_path)
             print_status(f"Video converted successfully to {output_path}", "success")
             return True, output_path
         except Exception as e:
@@ -60,17 +78,16 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
                     try:
                         ff_output = os.path.splitext(input_path)[0] + '.mp4'
                         ffmpeg_cmd = [
-                            "ffmpeg", "-y",
+                            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostats",
                             "-i", input_path,
                             "-c:v", "copy",
                             "-c:a", "copy",
                             ff_output
                         ]
-                        print_status("AV failed — falling back to FFmpeg", "info")
-                        process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                        for line in process.stdout:
-                            print(line, end='')
-                        process.wait()
+                        print_status(f"AV failed - falling back to FFmpeg: {os.path.basename(input_path)}", "loading")
+                        process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        if process.stderr.strip():
+                            print_status(process.stderr.strip(), "warning")
                         if process.returncode == 0:
                             print_status(f"Video converted successfully to {ff_output}", "success")
                             return True, ff_output

@@ -1,6 +1,18 @@
 import os
 import av
 
+from src.var import print_status
+
+# fix_ts() used to print nothing at all while remuxing/encoding - which
+# left a long silent stretch after all .ts downloads finished. A live tqdm
+# bar was tried here too, but mixing bars created at different times across
+# threads (download bars finishing/freeing their position while a
+# conversion bar claims it mid-batch, with plain print_status lines
+# interleaved in between) broke tqdm's row bookkeeping and produced
+# garbled, overlapping output. Kept simple instead: one line when a
+# conversion starts, one when it finishes - no live in-between updates.
+
+
 def sanitize_ts_file(filepath):
 
     if not os.path.exists(filepath):
@@ -40,7 +52,12 @@ def sanitize_ts_file(filepath):
 
 
 def fix_ts(infile, outfile):
+    label = os.path.basename(outfile)
+    print_status(f"Converting to mp4: {label}", "loading")
+    return _fix_ts_impl(infile, outfile)
 
+
+def _fix_ts_impl(infile, outfile):
     sanitize_ts_file(infile)
 
     open_options = {

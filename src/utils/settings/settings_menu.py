@@ -50,12 +50,14 @@ def settings_menu():
             print(f" - {Colors.OKCYAN}external{Colors.ENDC} : tag the folder name instead - "
                   f"[tvdb-XXXX] or [imdbid-ttXXXXXXX] (for {Colors.OKCYAN}TheTVDB{Colors.ENDC}/IMDb-based Plex agents; "
                   f"you type the exact tag once per anime when prompted)")
-            new_mode = input(f"{Colors.BOLD}Mode (mal/external): {Colors.ENDC}").strip().lower()
-            if new_mode in ("mal", "external"):
+            print(f" - {Colors.OKCYAN}none{Colors.ENDC}     : do nothing - no .match file, no folder tag, "
+                  f"no prompts at all (same as always passing {Colors.OKCYAN}--no-mal{Colors.ENDC})")
+            new_mode = input(f"{Colors.BOLD}Mode (mal/external/none): {Colors.ENDC}").strip().lower()
+            if new_mode in ("mal", "external", "none"):
                 set_setting("identification_mode", new_mode)
                 print_status(f"Identification method set to '{new_mode}'.", "success")
             else:
-                print_status("Cancelled (must be mal or external).", "warning")
+                print_status("Cancelled (must be mal, external or none).", "warning")
             input("Press Enter to continue...")
 
         elif choice == '3':

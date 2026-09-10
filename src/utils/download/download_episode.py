@@ -601,10 +601,14 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
 
 def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None):
     """Identifies save_dir to Plex, either via a MyAnimeList .match file or
-    (per the 'identification_mode' setting) an external-id folder tag.
-    Returns the directory to use for saving this episode's file - callers
-    must use the returned value, since tagging can rename save_dir."""
+    (per the 'identification_mode' setting) an external-id folder tag, or
+    does nothing at all if the mode is 'none'. Returns the directory to use
+    for saving this episode's file - callers must use the returned value,
+    since tagging can rename save_dir."""
     identification_mode = get_setting('identification_mode', 'mal')
+
+    if identification_mode == "none":
+        return save_dir
 
     if identification_mode == "external":
         if not anime_name:

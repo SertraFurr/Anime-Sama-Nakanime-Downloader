@@ -45,7 +45,7 @@ import re
 import sys
 import argparse
 from concurrent.futures                         import ThreadPoolExecutor, as_completed
-from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count
+from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count, fetch_nakanime_available_count
 from src.utils.fetch.fetch_video_source         import fetch_video_source
 from src.utils.print.print_episodes             import print_episodes
 from src.utils.get.get_player_choice            import get_player_choice, is_fast_player
@@ -102,6 +102,9 @@ def parse_selection_indices(user_input, count):
     return indices
 
 
+NAKANIME_FETCH_ALL_MAX = 45
+
+
 def plan_season(base_url, args, headers, interactive):
     """Asks every interactive question for one season (player, episodes,
     save path, threading/mp4 choices) and returns a plan dict ready for
@@ -127,27 +130,46 @@ def plan_season(base_url, args, headers, interactive):
     # quels episodes il veut AVANT ce fetch (plutot qu'apres, comme pour
     # anime-sama ou le cout est negligeable) evite de payer inutilement pour
     # toute une saison quand il n'en veut qu'une poignee.
+    #
+    # Exception : une petite saison (<= NAKANIME_FETCH_ALL_MAX) choisie en
+    # interactif est recuperee en entier d'abord - la grille compacte
+    # (print_episodes) montre alors les lecteurs dispo par episode, et on
+    # choisit ensuite. Sinon (grosse saison, --episodes, --latest) on ne
+    # propose que les episodes deja sortis (trouves par dichotomie).
     wanted_episodes = None
     if 'nakanime.tv' in base_url.lower():
         nb_episodes = fetch_nakanime_episode_count(base_url, headers=headers)
         if nb_episodes:
-            selection_str = None
-            if args.latest:
-                selection_str = str(nb_episodes)
-            elif args.episodes:
-                selection_str = args.episodes
-            elif interactive:
-                selection_str = input(
-                    f"{Colors.BOLD}This season has {nb_episodes} episodes. "
-                    f"Which ones do you want (1-{nb_episodes}, comma-separated, ranges like 12-49, or 'all')? "
-                    f"{Colors.ENDC}"
-                ).strip()
-                args.episodes = selection_str
+            fetch_all_first = (
+                nb_episodes <= NAKANIME_FETCH_ALL_MAX
+                and interactive and not args.episodes and not args.latest
+            )
+            if not fetch_all_first:
+                available = fetch_nakanime_available_count(base_url, headers=headers)
+                if available:
+                    print_status(f"{nb_episodes} episodes listed, {available} available (1-{available})", "info")
+                    nb_episodes = available
 
-            if selection_str and selection_str.lower() != 'all':
-                indices = parse_selection_indices(selection_str, nb_episodes)
-                if indices:
-                    wanted_episodes = {i + 1 for i in indices}
+                selection_str = None
+                if args.latest:
+                    selection_str = str(nb_episodes)
+                elif args.episodes:
+                    selection_str = args.episodes
+                elif interactive:
+                    selection_str = input(
+                        f"{Colors.BOLD}This season has {nb_episodes} available episodes. "
+                        f"Which ones do you want (1-{nb_episodes}, comma-separated, ranges like 12-49, or 'all')? "
+                        f"{Colors.ENDC}"
+                    ).strip()
+                    args.episodes = selection_str
+
+                if selection_str:
+                    if selection_str.lower() == 'all':
+                        wanted_episodes = set(range(1, nb_episodes + 1))
+                    else:
+                        indices = parse_selection_indices(selection_str, nb_episodes)
+                        if indices:
+                            wanted_episodes = {i + 1 for i in indices}
 
     episodes = fetch_episodes(base_url, headers=headers, wanted_episodes=wanted_episodes)
     if not episodes:
@@ -204,10 +226,12 @@ def plan_season(base_url, args, headers, interactive):
 
     if args.latest:
         if episodes and player_choice in episodes:
-            count = len(episodes[player_choice])
-            if count > 0:
-                episode_indices = [count - 1]
-                print_status(f"Latest episode selected: Episode {count}", "info")
+            # Derniere entree avec une source (les episodes pas encore sortis
+            # restent None en fin de liste).
+            last = max((i for i, u in enumerate(episodes[player_choice]) if u), default=None)
+            if last is not None:
+                episode_indices = [last]
+                print_status(f"Latest episode selected: Episode {last + 1}", "info")
             else:
                 print_status("No episodes found to select latest.", "error")
                 return None

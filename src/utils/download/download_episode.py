@@ -129,6 +129,15 @@ def _search_tvdb(query, timeout=10):
         return []
 
 
+def _spaced(name):
+    """Slug-style names like "one-outs" use hyphens as word separators."""
+    return re.sub(r"\s+", " ", re.sub(r"[-_]+", " ", name or "")).strip() or name
+
+
+def _search_tvdb_spaced(name):
+    return _search_tvdb(_spaced(name))
+
+
 _mal_search_cache = {}
 _cache_lock = threading.Lock()
 # Tracks which anime we've already printed the "using cached MAL data"
@@ -529,17 +538,17 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
 
         tvdb_candidates = []
         if has_tvdb_key:
-            print_status(f"Searching TVDB for: {anime_name}", "info")
-            tvdb_candidates = [dict(c, source="tvdb") for c in _search_tvdb(anime_name)]
+            print_status(f"Searching TVDB for: {_spaced(anime_name)}", "info")
+            tvdb_candidates = [dict(c, source="tvdb") for c in _search_tvdb_spaced(anime_name)]
 
-        print_status(f"Searching IMDb for: {anime_name}", "info")
+        print_status(f"Searching IMDb for: {_spaced(anime_name)}", "info")
         imdb_candidates = [dict(c, source="imdb") for c in _search_imdb(anime_name)]
 
         candidates = tvdb_candidates + imdb_candidates
 
         raw_tag = ""
         if candidates:
-            print(f"{Colors.BOLD}{Colors.HEADER}Results for '{anime_name}':{Colors.ENDC}")
+            print(f"{Colors.BOLD}{Colors.HEADER}Results for '{_spaced(anime_name)}':{Colors.ENDC}")
             for i, c in enumerate(candidates[:15]):
                 year_str = f", {c['year']}" if c['year'] else ""
                 src_label = "TVDB" if c["source"] == "tvdb" else "IMDb"

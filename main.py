@@ -275,9 +275,6 @@ def plan_season(base_url, args, headers, interactive):
     else:
         save_dir = format_save_path(get_anime_name, get_saison_info)
 
-    if not args.dest and not interactive:
-         os.makedirs(save_dir, exist_ok=True)
-
     if isinstance(episode_indices, int):
         episode_indices = [episode_indices]
 
@@ -325,11 +322,10 @@ def plan_season(base_url, args, headers, interactive):
     season_number = int(m_season_num.group()) if m_season_num else None
 
     if not args.no_mal and get_anime_name:
-        os.makedirs(save_dir, exist_ok=True)
         alt_names = fetch_alt_titles(base_url, headers=headers)
         # May rename save_dir (tvdb/imdb identification mode tags the folder
         # name) - every download below must use the returned path.
-        save_dir = create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
+        save_dir = create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number, write=False)
 
     print(f"\n{Colors.BOLD}{Colors.HEADER}🎬 PROCESSING EPISODES{Colors.ENDC}")
     print_separator()

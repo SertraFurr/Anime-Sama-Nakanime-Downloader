@@ -608,7 +608,54 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
             return save_dir
 
 
-def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None):
+def _write_match_files(save_dir, anime_name, mal_data, match_file_path):
+    """Write the .match file (or one per Part folder) for an identification
+    result - creating the folders only now, when there is something to write."""
+    if mal_data and "parts" in mal_data:
+        print_separator()
+        print_status(f"Multiple MAL entries selected for this season - creating one folder per part", "success")
+        for i, part in enumerate(mal_data["parts"], start=1):
+            part_dir = f"{save_dir} Part {i}"
+            os.makedirs(part_dir, exist_ok=True)
+            with open(os.path.join(part_dir, ".match"), 'w', encoding='utf-8') as match_file:
+                match_file.write(f"title: {part['title']}\n")
+                match_file.write(f"mal-id: {part['mal_id']}\n")
+            count_str = str(part['episode_count']) if part['episode_count'] else "unknown - check MAL"
+            print_status(f"  → Part {i}: {part['title']} (mal-id {part['mal_id']}) - {count_str} episodes → {part_dir}", "info")
+        print_separator()
+        print_status(
+            f"Files downloaded to '{save_dir}' still need to be moved into the Part "
+            f"folders above by hand, using the episode counts printed for each part.",
+            "warning",
+        )
+        print_separator()
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    if mal_data:
+        with open(match_file_path, 'w', encoding='utf-8') as match_file:
+            match_file.write(f"title: {mal_data['title']}\n")
+            match_file.write(f"mal-id: {mal_data['mal_id']}\n")
+
+        print_separator()
+        print_status(f"✓ Match file created: {match_file_path}", "success")
+        print_status(f"  → Title: {mal_data['title']}", "info")
+        print_status(f"  → MAL ID: {mal_data['mal_id']}", "info")
+        print_status(f"  → Type: {mal_data['type']}", "info")
+        print_separator()
+    else:
+        with open(match_file_path, 'w', encoding='utf-8') as match_file:
+            match_file.write(f"title: {anime_name}\n")
+            match_file.write("mal-id: unknown\n")
+
+        print_separator()
+        print_status(f"Match file created with default values: {match_file_path}", "warning")
+        print_status(f"Could not find or match anime on MAL", "warning")
+        print_separator()
+
+
+def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None, write=True):
     """Identifies save_dir to Plex, either via a MyAnimeList .match file or
     (per the 'identification_mode' setting) an external-id folder tag, or
     does nothing at all if the mode is 'none'. Returns the directory to use
@@ -636,11 +683,21 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
             match_file_path = os.path.join(save_dir, '.match')
 
             if cache_key in _mal_search_cache:
-                if cache_key not in _mal_cache_hit_announced:
+                if not write:
+                    return save_dir
+                already_written = (
+                    os.path.exists(match_file_path)
+                    or os.path.exists(os.path.join(f"{save_dir} Part 1", ".match"))
+                )
+                if not already_written:
+                    # Identified earlier (planning) but not written yet: this is
+                    # the moment the download starts.
+                    _write_match_files(save_dir, anime_name, _mal_search_cache[cache_key], match_file_path)
+                elif cache_key not in _mal_cache_hit_announced:
                     _mal_cache_hit_announced.add(cache_key)
                     print_status(f"Using cached MAL data (already in memory)", "info")
                 return save_dir
-            
+
             # Multi-part case leaves save_dir itself without a .match (files
             # get manually sorted into the sibling "Part" folders instead) -
             # detect that already-done state via the first part folder.
@@ -687,47 +744,13 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
             
             mal_data = search_anime_on_mal(anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
 
-            if mal_data and "parts" in mal_data:
-                print_separator()
-                print_status(f"Multiple MAL entries selected for this season - creating one folder per part", "success")
-                for i, part in enumerate(mal_data["parts"], start=1):
-                    part_dir = f"{save_dir} Part {i}"
-                    os.makedirs(part_dir, exist_ok=True)
-                    with open(os.path.join(part_dir, ".match"), 'w', encoding='utf-8') as match_file:
-                        match_file.write(f"title: {part['title']}\n")
-                        match_file.write(f"mal-id: {part['mal_id']}\n")
-                    count_str = str(part['episode_count']) if part['episode_count'] else "unknown - check MAL"
-                    print_status(f"  → Part {i}: {part['title']} (mal-id {part['mal_id']}) - {count_str} episodes → {part_dir}", "info")
-                print_separator()
-                print_status(
-                    f"Files downloaded to '{save_dir}' still need to be moved into the Part "
-                    f"folders above by hand, using the episode counts printed for each part.",
-                    "warning",
-                )
-                print_separator()
+            if not write:
+                # Keep the answer in memory; the .match (and the folder) is
+                # only written once a download actually starts.
+                _mal_search_cache.setdefault(cache_key, mal_data)
                 return save_dir
 
-            if mal_data:
-                with open(match_file_path, 'w', encoding='utf-8') as match_file:
-                    match_file.write(f"title: {mal_data['title']}\n")
-                    match_file.write(f"mal-id: {mal_data['mal_id']}\n")
-                
-                print_separator()
-                print_status(f"✓ Match file created: {match_file_path}", "success")
-                print_status(f"  → Title: {mal_data['title']}", "info")
-                print_status(f"  → MAL ID: {mal_data['mal_id']}", "info")
-                print_status(f"  → Type: {mal_data['type']}", "info")
-                print_separator()
-            else:
-                with open(match_file_path, 'w', encoding='utf-8') as match_file:
-                    match_file.write(f"title: {anime_name}\n")
-                    match_file.write("mal-id: unknown\n")
-                
-                print_separator()
-                print_status(f"Match file created with default values: {match_file_path}", "warning")
-                print_status(f"Could not find or match anime on MAL", "warning")
-                print_separator()
-
+            _write_match_files(save_dir, anime_name, mal_data, match_file_path)
             return save_dir
 
         except Exception as e:
@@ -779,7 +802,7 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         # [tvdb-XXXX]/[imdbid-XXXX] folder tag in tvdb/imdb identification
         # mode) - use its returned path for everything from here on so the
         # actual video file lands in the (possibly renamed) directory.
-        season_dir = create_match_file(season_dir, anime_name, interactive=interactive)
+        season_dir = create_match_file(season_dir, anime_name, interactive=interactive, season_number=season_number)
 
     # SxxExx naming instead of the old generic "{anime}_{N}.mp4" - Plex's
     # own scanner and Sonarr both need that pattern to reliably recognize

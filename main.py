@@ -47,7 +47,6 @@ import argparse
 from concurrent.futures                         import ThreadPoolExecutor, as_completed
 from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count, fetch_nakanime_available_count
 from src.utils.fetch.fetch_video_source         import fetch_video_source
-from src.utils.print.print_episodes             import print_episodes
 from src.utils.get.get_player_choice            import get_player_choice, is_fast_player
 from src.utils.get.get_episode_choice           import get_episode_choice
 from src.utils.check.check_package              import check_package
@@ -133,7 +132,7 @@ def plan_season(base_url, args, headers, interactive):
     #
     # Exception : une petite saison (<= NAKANIME_FETCH_ALL_MAX) choisie en
     # interactif est recuperee en entier d'abord - la grille compacte
-    # (print_episodes) montre alors les lecteurs dispo par episode, et on
+    # (liste des lecteurs) montre alors les lecteurs dispo par episode, et on
     # choisit ensuite. Sinon (grosse saison, --episodes, --latest) on ne
     # propose que les episodes deja sortis (trouves par dichotomie).
     wanted_episodes = None
@@ -175,8 +174,6 @@ def plan_season(base_url, args, headers, interactive):
     if not episodes:
         print_status("Failed to fetch episodes.", "error")
         return None
-
-    print_episodes(episodes, wanted_episodes=wanted_episodes)
 
     player_choice = None
     if args.player:

@@ -1,4 +1,5 @@
 from src.var import Colors, print_status, print_separator, SourceDomains
+from src.utils.print.format_ranges import format_ranges
 from src.utils.print.player_rows import summarize_players, format_player_row, display_names
 
 # Hebergeurs qui servent la video en HLS/m3u8 (plusieurs segments) - le
@@ -54,14 +55,20 @@ def _speed_hint(player_key, urls=None):
 
 
 def get_player_choice(episodes, wanted_episodes=None):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}🎮 SELECT PLAYER{Colors.ENDC}")
-    print_separator()
-
     available_players = list(episodes.keys())
     # Si seule une partie de la saison a ete demandee/fetchee, summarize_players
     # ne compte que sur cette portion (sinon "51/367" ferait croire que le
     # lecteur est presque tout casse alors qu'il couvre tout ce qui a ete demande).
-    _, _, available, rows = summarize_players(episodes, wanted_episodes)
+    considered, no_source, available, rows = summarize_players(episodes, wanted_episodes)
+
+    title = f"\n{Colors.BOLD}{Colors.HEADER}🎮 SELECT PLAYER{Colors.ENDC}"
+    if no_source:
+        title += f" · {available}/{len(considered)} episodes available ({format_ranges(no_source)} not released)"
+    else:
+        title += f" · {available} episodes"
+    print(title)
+    print_separator()
+
     shown = display_names(rows)
     name_width = max((len(n) for n in shown), default=0)
     for i, ((player, urls, working), name) in enumerate(zip(rows, shown), 1):

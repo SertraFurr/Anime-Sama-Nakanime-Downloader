@@ -493,13 +493,16 @@ def search_anime_on_mal(anime_name, interactive=True, alt_names=None, season_num
         _mal_search_cache[cache_key] = result
         return result
 
-_TAG_PATTERN = re.compile(r'\s*\[(tvdb|imdbid)-[\w]+\]\s*$')
-_VALID_TAG = re.compile(r'^(tvdb-\w+|imdbid-tt\d+)$', re.IGNORECASE)
+# Plex's TV agent only reads match hints inside CURLY braces ("{tvdb-12345}");
+# square brackets are treated as ignorable extra info. We write curly tags but
+# still recognise old square-bracket ones so those folders aren't tagged twice.
+_TAG_PATTERN = re.compile(r'\s*[\[{](tvdb|imdb|imdbid)-[\w]+[\]}]\s*$')
+_VALID_TAG = re.compile(r'^(tvdb-\w+|imdb(id)?-tt\d+)$', re.IGNORECASE)
 
 
 def _tag_dir_with_external_id(save_dir, anime_name, interactive):
     """Identify the show to Plex's TheTVDB/IMDb-based agents by appending a
-    "[tvdb-XXXX]" or "[imdbid-ttXXXXXXX]" tag to the SHOW's root folder name
+    "{tvdb-XXXX}" or "{imdb-ttXXXXXXX}" tag to the SHOW's root folder name
     (save_dir's parent - not the season subfolder itself), instead of
     writing a MyAnimeList .match file. Those agents assign one identity per
     show, derived from the top-level folder, same as MyAnimeList.bundle's
@@ -526,7 +529,7 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
         if not interactive:
             print_status(
                 f"Non-interactive run: skipping id tagging for '{anime_name}' "
-                f"(rename the show's root folder by hand with a [tvdb-XXXX] or [imdbid-ttXXXXXXX] suffix, "
+                f"(rename the show's root folder by hand with a {{tvdb-XXXX}} or {{imdb-ttXXXXXXX}} suffix, "
                 f"or run interactively once).",
                 "warning",
             )
@@ -555,14 +558,14 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
                 print(f"{Colors.OKCYAN}  [{i}] {c['title']} ({c['type']}{year_str}) - {src_label} {c['id']}{Colors.ENDC}")
             try:
                 choice = input(
-                    f"{Colors.BOLD}Select index, or type a tag directly ('tvdb-XXXX'/'imdbid-ttXXXXXXX'), "
+                    f"{Colors.BOLD}Select index, or type a tag directly ('tvdb-XXXX'/'imdb-ttXXXXXXX'), "
                     f"or blank to skip: {Colors.ENDC}"
                 ).strip()
             except EOFError:
                 choice = ""
             if choice.isdigit() and 0 <= int(choice) < len(candidates[:15]):
                 picked = candidates[int(choice)]
-                raw_tag = f"tvdb-{picked['id']}" if picked["source"] == "tvdb" else f"imdbid-{picked['id']}"
+                raw_tag = f"tvdb-{picked['id']}" if picked["source"] == "tvdb" else f"imdb-{picked['id']}"
             else:
                 raw_tag = choice
         else:
@@ -571,7 +574,7 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
             try:
                 raw_tag = input(
                     f"{Colors.BOLD}Enter tag for '{anime_name}' - "
-                    f"'tvdb-XXXX' or 'imdbid-ttXXXXXXX' (blank to skip): {Colors.ENDC}"
+                    f"'tvdb-XXXX' or 'imdb-ttXXXXXXX' (blank to skip): {Colors.ENDC}"
                 ).strip()
             except EOFError:
                 raw_tag = ""
@@ -583,14 +586,16 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
 
         if not _VALID_TAG.match(raw_tag):
             print_status(
-                f"'{raw_tag}' doesn't look like 'tvdb-XXXX' or 'imdbid-ttXXXXXXX' - leaving folder untagged.",
+                f"'{raw_tag}' doesn't look like 'tvdb-XXXX' or 'imdb-ttXXXXXXX' - leaving folder untagged.",
                 "error",
             )
             _external_id_cache[root_cache_key] = root_dir
             return save_dir
 
         grandparent = os.path.dirname(root_dir)
-        new_root = os.path.join(grandparent, f"{root_basename} [{raw_tag}]")
+        # Plex wants "{imdb-ttXXXX}" (accepting the older "imdbid-" spelling as input).
+        plex_tag = re.sub(r'^imdbid-', 'imdb-', raw_tag, flags=re.IGNORECASE)
+        new_root = os.path.join(grandparent, f"{root_basename} {{{plex_tag}}}")
 
         try:
             if os.path.exists(root_dir) and not os.path.exists(new_root):

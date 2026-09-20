@@ -48,7 +48,7 @@ def settings_menu():
             print(f" - {Colors.OKCYAN}mal{Colors.ENDC}      : write a .match file with the MyAnimeList id "
                   f"(for the {Colors.OKCYAN}MyAnimeList.bundle{Colors.ENDC} Plex agent - default)")
             print(f" - {Colors.OKCYAN}external{Colors.ENDC} : tag the folder name instead - "
-                  f"[tvdb-XXXX] or [imdbid-ttXXXXXXX] (for {Colors.OKCYAN}TheTVDB{Colors.ENDC}/IMDb-based Plex agents; "
+                  f"{{tvdb-XXXX}} or {{imdb-ttXXXXXXX}} (for {Colors.OKCYAN}TheTVDB{Colors.ENDC}/IMDb-based Plex agents; "
                   f"you type the exact tag once per anime when prompted)")
             print(f" - {Colors.OKCYAN}none{Colors.ENDC}     : do nothing - no .match file, no folder tag, "
                   f"no prompts at all (same as always passing {Colors.OKCYAN}--no-mal{Colors.ENDC})")

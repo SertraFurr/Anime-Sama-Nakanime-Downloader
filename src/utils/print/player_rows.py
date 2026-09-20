@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlparse
 from src.var import Colors, SourceDomains
 from src.utils.print.format_ranges import format_ranges
 
@@ -39,10 +40,25 @@ def display_names(rows):
             host = _detect_host(player, urls)
             if host and host != "player":
                 base = SourceDomains.DISPLAY_NAMES.get(host, host.capitalize())
+            else:
+                base = _domain_name(urls)
+            if base:
                 seen[base] = seen.get(base, 0) + 1
                 name = base if seen[base] == 1 else f"{base} {seen[base]}"
         names.append(name)
     return names
+
+
+def _domain_name(urls):
+    """Fallback for hosters we don't know: 'https://vk.com/x' -> 'Vk'."""
+    for url in urls or []:
+        if not url:
+            continue
+        host = (urlparse(url).hostname or "").removeprefix("www.")
+        labels = host.split(".")
+        if len(labels) >= 2 and labels[-2]:
+            return labels[-2].capitalize()
+    return None
 
 
 def format_player_row(player, urls, working, available, name_width, display=None):

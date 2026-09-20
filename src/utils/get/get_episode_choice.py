@@ -1,9 +1,11 @@
 from src.var import Colors, print_status, print_separator, SourceDomains
 from src.utils.print.format_ranges import format_ranges
+from src.utils.print.player_rows import summarize_players, display_names
 
 def get_episode_choice(episodes, player_choice):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}📺 SELECT EPISODE - {player_choice}{Colors.ENDC}")
-    print_separator()
+    rows = summarize_players(episodes)[3]
+    shown = dict(zip((r[0] for r in rows), display_names(rows)))
+    player_name = shown.get(player_choice, player_choice)
 
     num_episodes = len(episodes[player_choice])
     working_episodes = []
@@ -40,17 +42,17 @@ def get_episode_choice(episodes, player_choice):
         print_status("No working episodes found for this player!", "error")
         return None
 
-    line = f"{Colors.OKGREEN}✅ {format_ranges(working_episodes)}{Colors.ENDC}"
     # Les episodes au-dela du dernier dispo sont juste "pas encore sortis" :
-    # on ne les liste pas comme indisponibles.
+    # on ne les liste pas comme indisponibles. Rien a afficher si tout est
+    # dispo (deja dit dans l'en-tete du choix de lecteur).
     gaps = [i for i in unavailable_episodes if i < max(working_episodes)]
-    if gaps:
-        line += f"   {Colors.FAIL}❌ {format_ranges(gaps)}{Colors.ENDC}"
-    if deprecated_episodes:
-        line += f"   {Colors.WARNING}⚠️  {format_ranges(deprecated_episodes)} (deprecated){Colors.ENDC}"
-    print(line)
-
-    print(f"\n{Colors.OKCYAN}Available episodes: {len(working_episodes)} out of {num_episodes}{Colors.ENDC}")
+    if gaps or deprecated_episodes:
+        parts = [f"available {format_ranges(working_episodes)}"]
+        if gaps:
+            parts.append(f"unavailable {format_ranges(gaps)}")
+        if deprecated_episodes:
+            parts.append(f"deprecated source {format_ranges(deprecated_episodes)}")
+        print(f"\n{Colors.WARNING}[~] {player_name}: " + " · ".join(parts) + Colors.ENDC)
 
     while True:
         try:

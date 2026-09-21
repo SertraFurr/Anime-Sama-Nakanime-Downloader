@@ -129,6 +129,15 @@ def _search_tvdb(query, timeout=10):
         return []
 
 
+def _spaced(name):
+    """Slug-style names like "one-outs" use hyphens as word separators."""
+    return re.sub(r"\s+", " ", re.sub(r"[-_]+", " ", name or "")).strip() or name
+
+
+def _search_tvdb_spaced(name):
+    return _search_tvdb(_spaced(name))
+
+
 _mal_search_cache = {}
 _cache_lock = threading.Lock()
 # Tracks which anime we've already printed the "using cached MAL data"
@@ -484,13 +493,16 @@ def search_anime_on_mal(anime_name, interactive=True, alt_names=None, season_num
         _mal_search_cache[cache_key] = result
         return result
 
-_TAG_PATTERN = re.compile(r'\s*\[(tvdb|imdbid)-[\w]+\]\s*$')
-_VALID_TAG = re.compile(r'^(tvdb-\w+|imdbid-tt\d+)$', re.IGNORECASE)
+# Plex's TV agent only reads match hints inside CURLY braces ("{tvdb-12345}");
+# square brackets are treated as ignorable extra info. We write curly tags but
+# still recognise old square-bracket ones so those folders aren't tagged twice.
+_TAG_PATTERN = re.compile(r'\s*[\[{](tvdb|imdb|imdbid)-[\w]+[\]}]\s*$')
+_VALID_TAG = re.compile(r'^(tvdb-\w+|imdb(id)?-tt\d+)$', re.IGNORECASE)
 
 
 def _tag_dir_with_external_id(save_dir, anime_name, interactive):
     """Identify the show to Plex's TheTVDB/IMDb-based agents by appending a
-    "[tvdb-XXXX]" or "[imdbid-ttXXXXXXX]" tag to the SHOW's root folder name
+    "{tvdb-XXXX}" or "{imdb-ttXXXXXXX}" tag to the SHOW's root folder name
     (save_dir's parent - not the season subfolder itself), instead of
     writing a MyAnimeList .match file. Those agents assign one identity per
     show, derived from the top-level folder, same as MyAnimeList.bundle's
@@ -517,7 +529,7 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
         if not interactive:
             print_status(
                 f"Non-interactive run: skipping id tagging for '{anime_name}' "
-                f"(rename the show's root folder by hand with a [tvdb-XXXX] or [imdbid-ttXXXXXXX] suffix, "
+                f"(rename the show's root folder by hand with a {{tvdb-XXXX}} or {{imdb-ttXXXXXXX}} suffix, "
                 f"or run interactively once).",
                 "warning",
             )
@@ -529,31 +541,31 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
 
         tvdb_candidates = []
         if has_tvdb_key:
-            print_status(f"Searching TVDB for: {anime_name}", "info")
-            tvdb_candidates = [dict(c, source="tvdb") for c in _search_tvdb(anime_name)]
+            print_status(f"Searching TVDB for: {_spaced(anime_name)}", "info")
+            tvdb_candidates = [dict(c, source="tvdb") for c in _search_tvdb_spaced(anime_name)]
 
-        print_status(f"Searching IMDb for: {anime_name}", "info")
+        print_status(f"Searching IMDb for: {_spaced(anime_name)}", "info")
         imdb_candidates = [dict(c, source="imdb") for c in _search_imdb(anime_name)]
 
         candidates = tvdb_candidates + imdb_candidates
 
         raw_tag = ""
         if candidates:
-            print(f"{Colors.BOLD}{Colors.HEADER}Results for '{anime_name}':{Colors.ENDC}")
+            print(f"{Colors.BOLD}{Colors.HEADER}Results for '{_spaced(anime_name)}':{Colors.ENDC}")
             for i, c in enumerate(candidates[:15]):
                 year_str = f", {c['year']}" if c['year'] else ""
                 src_label = "TVDB" if c["source"] == "tvdb" else "IMDb"
                 print(f"{Colors.OKCYAN}  [{i}] {c['title']} ({c['type']}{year_str}) - {src_label} {c['id']}{Colors.ENDC}")
             try:
                 choice = input(
-                    f"{Colors.BOLD}Select index, or type a tag directly ('tvdb-XXXX'/'imdbid-ttXXXXXXX'), "
+                    f"{Colors.BOLD}Select index, or type a tag directly ('tvdb-XXXX'/'imdb-ttXXXXXXX'), "
                     f"or blank to skip: {Colors.ENDC}"
                 ).strip()
             except EOFError:
                 choice = ""
             if choice.isdigit() and 0 <= int(choice) < len(candidates[:15]):
                 picked = candidates[int(choice)]
-                raw_tag = f"tvdb-{picked['id']}" if picked["source"] == "tvdb" else f"imdbid-{picked['id']}"
+                raw_tag = f"tvdb-{picked['id']}" if picked["source"] == "tvdb" else f"imdb-{picked['id']}"
             else:
                 raw_tag = choice
         else:
@@ -562,7 +574,7 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
             try:
                 raw_tag = input(
                     f"{Colors.BOLD}Enter tag for '{anime_name}' - "
-                    f"'tvdb-XXXX' or 'imdbid-ttXXXXXXX' (blank to skip): {Colors.ENDC}"
+                    f"'tvdb-XXXX' or 'imdb-ttXXXXXXX' (blank to skip): {Colors.ENDC}"
                 ).strip()
             except EOFError:
                 raw_tag = ""
@@ -574,14 +586,16 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
 
         if not _VALID_TAG.match(raw_tag):
             print_status(
-                f"'{raw_tag}' doesn't look like 'tvdb-XXXX' or 'imdbid-ttXXXXXXX' - leaving folder untagged.",
+                f"'{raw_tag}' doesn't look like 'tvdb-XXXX' or 'imdb-ttXXXXXXX' - leaving folder untagged.",
                 "error",
             )
             _external_id_cache[root_cache_key] = root_dir
             return save_dir
 
         grandparent = os.path.dirname(root_dir)
-        new_root = os.path.join(grandparent, f"{root_basename} [{raw_tag}]")
+        # Plex wants "{imdb-ttXXXX}" (accepting the older "imdbid-" spelling as input).
+        plex_tag = re.sub(r'^imdbid-', 'imdb-', raw_tag, flags=re.IGNORECASE)
+        new_root = os.path.join(grandparent, f"{root_basename} {{{plex_tag}}}")
 
         try:
             if os.path.exists(root_dir) and not os.path.exists(new_root):
@@ -599,7 +613,54 @@ def _tag_dir_with_external_id(save_dir, anime_name, interactive):
             return save_dir
 
 
-def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None):
+def _write_match_files(save_dir, anime_name, mal_data, match_file_path):
+    """Write the .match file (or one per Part folder) for an identification
+    result - creating the folders only now, when there is something to write."""
+    if mal_data and "parts" in mal_data:
+        print_separator()
+        print_status(f"Multiple MAL entries selected for this season - creating one folder per part", "success")
+        for i, part in enumerate(mal_data["parts"], start=1):
+            part_dir = f"{save_dir} Part {i}"
+            os.makedirs(part_dir, exist_ok=True)
+            with open(os.path.join(part_dir, ".match"), 'w', encoding='utf-8') as match_file:
+                match_file.write(f"title: {part['title']}\n")
+                match_file.write(f"mal-id: {part['mal_id']}\n")
+            count_str = str(part['episode_count']) if part['episode_count'] else "unknown - check MAL"
+            print_status(f"  → Part {i}: {part['title']} (mal-id {part['mal_id']}) - {count_str} episodes → {part_dir}", "info")
+        print_separator()
+        print_status(
+            f"Files downloaded to '{save_dir}' still need to be moved into the Part "
+            f"folders above by hand, using the episode counts printed for each part.",
+            "warning",
+        )
+        print_separator()
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    if mal_data:
+        with open(match_file_path, 'w', encoding='utf-8') as match_file:
+            match_file.write(f"title: {mal_data['title']}\n")
+            match_file.write(f"mal-id: {mal_data['mal_id']}\n")
+
+        print_separator()
+        print_status(f"✓ Match file created: {match_file_path}", "success")
+        print_status(f"  → Title: {mal_data['title']}", "info")
+        print_status(f"  → MAL ID: {mal_data['mal_id']}", "info")
+        print_status(f"  → Type: {mal_data['type']}", "info")
+        print_separator()
+    else:
+        with open(match_file_path, 'w', encoding='utf-8') as match_file:
+            match_file.write(f"title: {anime_name}\n")
+            match_file.write("mal-id: unknown\n")
+
+        print_separator()
+        print_status(f"Match file created with default values: {match_file_path}", "warning")
+        print_status(f"Could not find or match anime on MAL", "warning")
+        print_separator()
+
+
+def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, season_number=None, write=True):
     """Identifies save_dir to Plex, either via a MyAnimeList .match file or
     (per the 'identification_mode' setting) an external-id folder tag, or
     does nothing at all if the mode is 'none'. Returns the directory to use
@@ -627,11 +688,21 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
             match_file_path = os.path.join(save_dir, '.match')
 
             if cache_key in _mal_search_cache:
-                if cache_key not in _mal_cache_hit_announced:
+                if not write:
+                    return save_dir
+                already_written = (
+                    os.path.exists(match_file_path)
+                    or os.path.exists(os.path.join(f"{save_dir} Part 1", ".match"))
+                )
+                if not already_written:
+                    # Identified earlier (planning) but not written yet: this is
+                    # the moment the download starts.
+                    _write_match_files(save_dir, anime_name, _mal_search_cache[cache_key], match_file_path)
+                elif cache_key not in _mal_cache_hit_announced:
                     _mal_cache_hit_announced.add(cache_key)
                     print_status(f"Using cached MAL data (already in memory)", "info")
                 return save_dir
-            
+
             # Multi-part case leaves save_dir itself without a .match (files
             # get manually sorted into the sibling "Part" folders instead) -
             # detect that already-done state via the first part folder.
@@ -678,47 +749,13 @@ def create_match_file(save_dir, anime_name, interactive=True, alt_names=None, se
             
             mal_data = search_anime_on_mal(anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number)
 
-            if mal_data and "parts" in mal_data:
-                print_separator()
-                print_status(f"Multiple MAL entries selected for this season - creating one folder per part", "success")
-                for i, part in enumerate(mal_data["parts"], start=1):
-                    part_dir = f"{save_dir} Part {i}"
-                    os.makedirs(part_dir, exist_ok=True)
-                    with open(os.path.join(part_dir, ".match"), 'w', encoding='utf-8') as match_file:
-                        match_file.write(f"title: {part['title']}\n")
-                        match_file.write(f"mal-id: {part['mal_id']}\n")
-                    count_str = str(part['episode_count']) if part['episode_count'] else "unknown - check MAL"
-                    print_status(f"  → Part {i}: {part['title']} (mal-id {part['mal_id']}) - {count_str} episodes → {part_dir}", "info")
-                print_separator()
-                print_status(
-                    f"Files downloaded to '{save_dir}' still need to be moved into the Part "
-                    f"folders above by hand, using the episode counts printed for each part.",
-                    "warning",
-                )
-                print_separator()
+            if not write:
+                # Keep the answer in memory; the .match (and the folder) is
+                # only written once a download actually starts.
+                _mal_search_cache.setdefault(cache_key, mal_data)
                 return save_dir
 
-            if mal_data:
-                with open(match_file_path, 'w', encoding='utf-8') as match_file:
-                    match_file.write(f"title: {mal_data['title']}\n")
-                    match_file.write(f"mal-id: {mal_data['mal_id']}\n")
-                
-                print_separator()
-                print_status(f"✓ Match file created: {match_file_path}", "success")
-                print_status(f"  → Title: {mal_data['title']}", "info")
-                print_status(f"  → MAL ID: {mal_data['mal_id']}", "info")
-                print_status(f"  → Type: {mal_data['type']}", "info")
-                print_separator()
-            else:
-                with open(match_file_path, 'w', encoding='utf-8') as match_file:
-                    match_file.write(f"title: {anime_name}\n")
-                    match_file.write("mal-id: unknown\n")
-                
-                print_separator()
-                print_status(f"Match file created with default values: {match_file_path}", "warning")
-                print_status(f"Could not find or match anime on MAL", "warning")
-                print_separator()
-
+            _write_match_files(save_dir, anime_name, mal_data, match_file_path)
             return save_dir
 
         except Exception as e:
@@ -770,7 +807,7 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         # [tvdb-XXXX]/[imdbid-XXXX] folder tag in tvdb/imdb identification
         # mode) - use its returned path for everything from here on so the
         # actual video file lands in the (possibly renamed) directory.
-        season_dir = create_match_file(season_dir, anime_name, interactive=interactive)
+        season_dir = create_match_file(season_dir, anime_name, interactive=interactive, season_number=season_number)
 
     # SxxExx naming instead of the old generic "{anime}_{N}.mp4" - Plex's
     # own scanner and Sonarr both need that pattern to reliably recognize

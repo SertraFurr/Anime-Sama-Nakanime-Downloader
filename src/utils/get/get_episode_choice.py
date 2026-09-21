@@ -1,8 +1,11 @@
 from src.var import Colors, print_status, print_separator, SourceDomains
+from src.utils.print.format_ranges import format_ranges
+from src.utils.print.player_rows import summarize_players, display_names
 
 def get_episode_choice(episodes, player_choice):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}📺 SELECT EPISODE - {player_choice}{Colors.ENDC}")
-    print_separator()
+    rows = summarize_players(episodes)[3]
+    shown = dict(zip((r[0] for r in rows), display_names(rows)))
+    player_name = shown.get(player_choice, player_choice)
 
     num_episodes = len(episodes[player_choice])
     working_episodes = []
@@ -11,9 +14,12 @@ def get_episode_choice(episodes, player_choice):
     for domain in SourceDomains.PLAYERS:
          source_types[domain] = SourceDomains.DISPLAY_NAMES.get(domain, domain.capitalize())
 
+    unavailable_episodes = []
+    deprecated_episodes = []
+
     for i, url in enumerate(episodes[player_choice], 1):
         if url is None:
-            print(f"{Colors.FAIL}  {i:2d}. Episode {i} - Unavailable ❌{Colors.ENDC}")
+            unavailable_episodes.append(i)
             continue
 
         url_lower = url.lower()
@@ -29,20 +35,29 @@ def get_episode_choice(episodes, player_choice):
 
         if found_type:
             working_episodes.append(i)
-            print(f"{Colors.OKGREEN}  {i:2d}. Episode {i} - {found_type} ✅{Colors.ENDC}")
         else:
-            print(f"{Colors.FAIL}  {i:2d}. Episode {i} - Deprecated ❌{Colors.ENDC}")
+            deprecated_episodes.append(i)
 
     if not working_episodes:
         print_status("No working episodes found for this player!", "error")
         return None
 
-    print(f"\n{Colors.OKCYAN}Available episodes: {len(working_episodes)} out of {num_episodes}{Colors.ENDC}")
+    # Les episodes au-dela du dernier dispo sont juste "pas encore sortis" :
+    # on ne les liste pas comme indisponibles. Rien a afficher si tout est
+    # dispo (deja dit dans l'en-tete du choix de lecteur).
+    gaps = [i for i in unavailable_episodes if i < max(working_episodes)]
+    if gaps or deprecated_episodes:
+        parts = [f"available {format_ranges(working_episodes)}"]
+        if gaps:
+            parts.append(f"unavailable {format_ranges(gaps)}")
+        if deprecated_episodes:
+            parts.append(f"deprecated source {format_ranges(deprecated_episodes)}")
+        print(f"\n{Colors.WARNING}[~] {player_name}: " + " · ".join(parts) + Colors.ENDC)
 
     while True:
         try:
             episode_input = input(
-                f"\n{Colors.BOLD}Enter episode number(s) (1-{num_episodes}, "
+                f"\n{Colors.BOLD}Enter episode number(s) (1-{max(working_episodes)}, "
                 "comma-separated example 1,2,3, ranges like 12-49, or 'all' for all available): "
                 f"{Colors.ENDC}"
             ).strip().lower()

@@ -72,6 +72,83 @@ def _get_nakanime_episode_numbers(session, anime_id, target_season):
     return ep_numbers
 
 
+NAKANIME_SOURCES_PATH = "/api/sources/anime"
+
+
+def _fetch_nakanime_sources(session, anime_id, target_season, ep_num):
+    """Sources d'un episode Nakanime (liste de dicts host/language/url), []
+    si l'episode existe mais n'est pas encore sorti, None si la requete a
+    echoue. Respecte le Retry-After du site en cas de 429."""
+    ep_page_url = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/{ep_num}"
+    url_src = f"https://nakanime.tv{NAKANIME_SOURCES_PATH}"
+
+    for attempt in range(2):
+        try:
+            r_page = session.get(ep_page_url, timeout=10)
+            if r_page.status_code == 429:
+                wait_s = int(r_page.headers.get("Retry-After", 30)) + 1
+                print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
+                time.sleep(wait_s)
+                continue
+
+            m_ep_id = re.search(r'data-episode-id=["\'](\d+)["\']', r_page.text)
+            if not m_ep_id:
+                raise ValueError("episode id not found")
+            ep_id = int(m_ep_id.group(1))
+
+            payload = {"anime_id": anime_id, "episode_id": ep_id, "turnstile_token": ""}
+            r_src = session.post(url_src, headers={"Content-Type": "application/json"}, json=payload, timeout=10)
+            if r_src.status_code == 429:
+                wait_s = int(r_src.headers.get("Retry-After", 30)) + 1
+                print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
+                time.sleep(wait_s)
+                continue
+            if r_src.status_code != 200:
+                raise ValueError(f"sources request failed with status {r_src.status_code}")
+
+            dec_src = decode_nakanime_response(r_src.content, NAKANIME_SOURCES_PATH)
+            return json.loads(dec_src.decode('utf-8'))
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.8)
+            continue
+    return None
+
+
+def fetch_nakanime_available_count(base_url, headers=None):
+    """Plus grand numero d'episode qui a deja des sources, trouve par
+    dichotomie (une dizaine de requetes au lieu de 2 par episode). Les
+    episodes sortent dans l'ordre, donc disponible = 1..K. None si aucun
+    episode n'est dispo ou si la sonde echoue."""
+    unquoted = urllib.parse.unquote(base_url)
+    match_anime = re.search(r'/anime/(\d+)', unquoted)
+    if not match_anime:
+        return None
+    anime_id = int(match_anime.group(1))
+    match_season = re.search(r'/season/(\d+)', unquoted)
+    target_season = int(match_season.group(1)) if match_season else 1
+
+    try:
+        session, _ = _get_nakanime_session_and_headers(headers)
+        numbers = _get_nakanime_episode_numbers(session, anime_id, target_season)
+        if not numbers:
+            return None
+        lo, hi, best = 0, len(numbers) - 1, None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            sources = _fetch_nakanime_sources(session, anime_id, target_season, numbers[mid])
+            if sources is None:
+                return None
+            if sources:
+                best = numbers[mid]
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best
+    except Exception:
+        return None
+
+
 def fetch_nakanime_episode_count(base_url, headers=None):
     """Recupere uniquement le nombre d'episodes disponibles, sans faire le
     fetch couteux (source par episode). Sert a demander a l'utilisateur
@@ -132,8 +209,6 @@ def fetch_nakanime_episodes(base_url, headers=None, wanted_episodes=None):
         # meme si un episode echoue au fetch (sinon tous les episodes suivants
         # se retrouveraient decales d'une position, silencieusement).
         player_episodes_by_num = {}
-        path_src = "/api/sources/anime"
-        url_src = f"https://nakanime.tv{path_src}"
 
         # Envoyer ~700 requetes sequentielles sans pause declenche du
         # rate-limiting cote serveur, surtout vers la fin d'une longue
@@ -152,40 +227,7 @@ def fetch_nakanime_episodes(base_url, headers=None, wanted_episodes=None):
         # qu'on le voit, au lieu de le retenter en boucle trop tot.
         print_status(f"Fetching sources for {len(ep_numbers)} episodes...", "loading")
         for ep_num in ep_numbers:
-            ep_page_url = f"https://nakanime.tv/anime/{anime_id}/season/{target_season}/episode/{ep_num}"
-
-            sources = None
-            for attempt in range(2):
-                try:
-                    r_page = session.get(ep_page_url, timeout=10)
-                    if r_page.status_code == 429:
-                        wait_s = int(r_page.headers.get("Retry-After", 30)) + 1
-                        print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
-                        time.sleep(wait_s)
-                        continue
-
-                    m_ep_id = re.search(r'data-episode-id=["\'](\d+)["\']', r_page.text)
-                    if not m_ep_id:
-                        raise ValueError("episode id not found")
-                    ep_id = int(m_ep_id.group(1))
-
-                    payload = {"anime_id": anime_id, "episode_id": ep_id, "turnstile_token": ""}
-                    r_src = session.post(url_src, headers={"Content-Type": "application/json"}, json=payload, timeout=10)
-                    if r_src.status_code == 429:
-                        wait_s = int(r_src.headers.get("Retry-After", 30)) + 1
-                        print_status(f"Rate-limited by Nakanime, waiting {wait_s}s before resuming...", "warning")
-                        time.sleep(wait_s)
-                        continue
-                    if r_src.status_code != 200:
-                        raise ValueError(f"sources request failed with status {r_src.status_code}")
-
-                    dec_src = decode_nakanime_response(r_src.content, path_src)
-                    sources = json.loads(dec_src.decode('utf-8'))
-                    break
-                except Exception:
-                    if attempt == 0:
-                        time.sleep(0.8)
-                    continue
+            sources = _fetch_nakanime_sources(session, anime_id, target_season, ep_num)
 
             if sources:
                 seen_counts = {}

@@ -1,4 +1,6 @@
 from src.var import Colors, print_status, print_separator, SourceDomains
+from src.utils.print.format_ranges import format_ranges
+from src.utils.print.player_rows import summarize_players, format_player_row, display_names
 
 # Hebergeurs qui servent la video en HLS/m3u8 (plusieurs segments) - le
 # telechargeur peut les recuperer en plusieurs morceaux/threads en parallele,
@@ -53,29 +55,27 @@ def _speed_hint(player_key, urls=None):
 
 
 def get_player_choice(episodes, wanted_episodes=None):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}🎮 SELECT PLAYER{Colors.ENDC}")
+    available_players = list(episodes.keys())
+    # Si seule une partie de la saison a ete demandee/fetchee, summarize_players
+    # ne compte que sur cette portion (sinon "51/367" ferait croire que le
+    # lecteur est presque tout casse alors qu'il couvre tout ce qui a ete demande).
+    considered, no_source, available, rows = summarize_players(episodes, wanted_episodes)
+
+    title = f"\n{Colors.BOLD}{Colors.HEADER}🎮 SELECT PLAYER{Colors.ENDC}"
+    if no_source:
+        title += f" · {available}/{len(considered)} episodes available ({format_ranges(no_source)} not released)"
+    else:
+        title += f" · {available} episodes"
+    print(title)
     print_separator()
 
-    available_players = list(episodes.keys())
-    valid_sources = SourceDomains.PLAYERS
-    for i, player in enumerate(available_players, 1):
-        # Si seule une partie de la saison a ete demandee/fetchee, ne compte
-        # que sur cette portion - sinon "51/367" donne l'impression trompeuse
-        # que ce lecteur est presque tout casse, alors qu'il couvre tout ce
-        # qui a ete demande.
-        if wanted_episodes:
-            urls_to_check = [url for idx, url in enumerate(episodes[player], 1) if idx in wanted_episodes]
-        else:
-            urls_to_check = episodes[player]
-        working_episodes = sum(
-            1 for url in urls_to_check
-            if SourceDomains.is_valid_url(url, category=player)
-        )
-        total_episodes = len(urls_to_check)
-        speed_hint = _speed_hint(player, urls_to_check)
-        speed_suffix = f" [{speed_hint}{Colors.OKCYAN}]" if speed_hint else ""
-        print(f"{Colors.OKCYAN}  {i}. {player} ({working_episodes}/{total_episodes} working episodes){speed_suffix}{Colors.ENDC}")
-    
+    shown = display_names(rows)
+    name_width = max((len(n) for n in shown), default=0)
+    for i, ((player, urls, working), name) in enumerate(zip(rows, shown), 1):
+        print(f"  {i}. {format_player_row(player, urls, working, available, name_width, display=name)}")
+    by_display_name = {n.lower(): p for n, p in zip(shown, available_players)}
+
+
     while True:
         try:
             choice = input(f"\n{Colors.BOLD}Enter player number (1-{len(available_players)}, 0 to cancel) or type player name: {Colors.ENDC}").strip()
@@ -92,6 +92,8 @@ def get_player_choice(episodes, wanted_episodes=None):
                     print_status(f"Please enter a number between 0 and {len(available_players)}", "error")
             else:
                 player_input = choice.lower()
+                if player_input in by_display_name:
+                    return by_display_name[player_input]
                 if player_input.isdigit():
                     player_choice = f"Player {player_input}"
                 elif player_input.startswith("player") and player_input[6:].isdigit():

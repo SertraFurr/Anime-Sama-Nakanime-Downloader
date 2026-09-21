@@ -38,13 +38,21 @@ def get_save_directory(anime_name=None, saison_info=None):
     else:
         save_dir = formatted_path
     
-    try:
-        os.makedirs(save_dir, exist_ok=True)
+    # The folder itself is only created when the first file is written, so
+    # cancelling before the download leaves nothing behind - here we just
+    # check that it could be created (nearest existing parent is writable).
+    ancestor = os.path.abspath(save_dir)
+    while not os.path.exists(ancestor):
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        ancestor = parent
+
+    if os.path.isdir(ancestor) and os.access(ancestor, os.W_OK):
         print_status(f"Save directory confirmed: {os.path.abspath(save_dir)}", "success")
         return save_dir
-    except Exception as e:
-        print_status(f"Cannot create directory {save_dir}: {str(e)}", "error")
-        default_fallback = "./videos/"
-        print_status(f"Using fallback: {default_fallback}", "info")
-        os.makedirs(default_fallback, exist_ok=True)
-        return default_fallback
+
+    print_status(f"Cannot write to {save_dir}", "error")
+    default_fallback = "./videos/"
+    print_status(f"Using fallback: {default_fallback}", "info")
+    return default_fallback

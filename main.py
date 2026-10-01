@@ -1,13 +1,14 @@
-from src.utils.config.config import get_cookies, set_cookies, check_cookies
+from src.utils.config.config import get_cookies, set_cookies, check_cookies, get_domain_cookies, set_domain_cookies, check_domain_cookies
 from src.utils.print.print_status import print_status
 from src.var import Colors, get_domain, print_header, print_separator, print_tutorial, generate_requests_headers, SourceDomains
 from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled
 
-def tutorial_input():
+def tutorial_input(domain=None):
+    domain = domain or get_domain()
     print_status("No valid Cloudflare cookies found. Let's set them up!", "info")
-    print_status(f"1. Open {get_domain()} in your browser.", "info")
+    print_status(f"1. Open {domain} in your browser.", "info")
     print_status("2. Press F12 to open Developer Tools.", "info")
-    print_status(f"3. Go to the 'Application' tab → Cookies → select {get_domain()}.", "info")
+    print_status(f"3. Go to the 'Application' tab → Cookies → select {domain}.", "info")
     print_status("4. Copy the value of the 'cf_clearance' cookie.", "info")
     cf_clearance = input("Paste the cf_clearance value here: ").strip()
 
@@ -18,7 +19,31 @@ def tutorial_input():
 
     return cf_clearance, user_agent
 
-print("Checking if cloudflare is enabled..")
+
+def ensure_domain_cookies(domain):
+    """Any site (not just the main configured domain) can turn out to sit
+    behind its own Cloudflare challenge - same manual cf_clearance dance as
+    the startup check above, reusable for whichever domain needs it, each
+    stored under its own key so they never clash with each other. Interactive
+    only (the fallback script must never hang on input() in the background -
+    callers only invoke this when interactive)."""
+    stored = get_domain_cookies(domain)
+    if stored:
+        request_headers = {"User-Agent": stored[1]["User-Agent"]}
+        if check_domain_cookies(domain, request_headers):
+            return
+
+    print_status(f"{domain} is behind Cloudflare too - needs its own cookie.", "info")
+    while True:
+        cf_clearance, user_agent = tutorial_input(domain=domain)
+        set_domain_cookies(domain, cf_clearance, user_agent)
+        if check_domain_cookies(domain, {"User-Agent": user_agent}):
+            print_status(f"{domain} cookies are valid.", "success")
+            return
+        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
+        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
+
+print(f"Checking if cloudflare is enabled on {get_domain()}..")
 cloudflare = check_if_cloudflare_enabled(domain=get_domain(), headers={"User-Agent": "Mozilla/5.0"})
 
 if cloudflare:
@@ -39,6 +64,18 @@ if cloudflare:
     headers = generate_requests_headers(cf_clearance, user_agent)
 else:
     headers = generate_requests_headers("None", "Mozilla/5.0")
+
+# Same check for Nakanime, right alongside the main domain's - but only when
+# this is a bare, fully-interactive launch (no CLI args at all). fallback.py
+# always runs main.py WITH args (--url, --episodes, ...), so it never hits
+# this and never risks hanging on input() in the background; it still gets
+# its own nakanime.tv check later, deep in plan_season(), properly gated on
+# `interactive`.
+import sys as _sys
+if len(_sys.argv) == 1:
+    print("Checking if cloudflare is enabled on nakanime.tv..")
+    if check_if_cloudflare_enabled(domain="nakanime.tv", headers={"User-Agent": "Mozilla/5.0"}):
+        ensure_domain_cookies("nakanime.tv")
 
 import os
 import re
@@ -137,6 +174,8 @@ def plan_season(base_url, args, headers, interactive):
     # propose que les episodes deja sortis (trouves par dichotomie).
     wanted_episodes = None
     if 'nakanime.tv' in base_url.lower():
+        if interactive:
+            ensure_domain_cookies("nakanime.tv")
         nb_episodes = fetch_nakanime_episode_count(base_url, headers=headers)
         if nb_episodes:
             fetch_all_first = (

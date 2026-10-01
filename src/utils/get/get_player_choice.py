@@ -10,9 +10,10 @@ SEGMENTED_HOSTS = {
     "vidmoly", "voe", "vidzy", "filemoon", "uqload", "ansembed",
     "movearnpre", "embed4me", "lulustream", "luluvdo", "vidhide",
 }
-# Sibnet et Sendvid renvoient un lien fichier unique (pas de decoupage
-# possible) - un seul flux, donc potentiellement plus lent sur un gros fichier.
-DIRECT_FILE_HOSTS = {"sibnet", "sendvid"}
+# Hosts serving a direct file that support accelerated multi-connection range downloading
+FAST_DIRECT_HOSTS = {"sendvid"}
+# Hosts without known multi-threaded range acceleration
+DIRECT_FILE_HOSTS = {"sibnet"}
 
 
 def _detect_host(player_key, urls=None):
@@ -24,7 +25,7 @@ def _detect_host(player_key, urls=None):
     player_key. Try the key first, fall back to sniffing the URLs.
     """
     base = player_key.split(" ")[0].lower()
-    if base in SEGMENTED_HOSTS or base in DIRECT_FILE_HOSTS:
+    if base in SEGMENTED_HOSTS or base in FAST_DIRECT_HOSTS or base in DIRECT_FILE_HOSTS:
         return base
 
     for url in (urls or []):
@@ -40,14 +41,15 @@ def _detect_host(player_key, urls=None):
 
 def is_fast_player(player_key, urls=None):
     """True if this player serves HLS/m3u8 (segmented, multi-thread capable)
-    rather than a single direct file - used to prefer fast alternatives when
-    a player fails and the downloader falls back to another one."""
-    return _detect_host(player_key, urls) in SEGMENTED_HOSTS
+    or accelerated range chunks (Sendvid) - used to prefer fast alternatives
+    when a player fails and the downloader falls back to another one."""
+    host = _detect_host(player_key, urls)
+    return host in SEGMENTED_HOSTS or host in FAST_DIRECT_HOSTS
 
 
 def _speed_hint(player_key, urls=None):
     host = _detect_host(player_key, urls)
-    if host in SEGMENTED_HOSTS:
+    if host in SEGMENTED_HOSTS or host in FAST_DIRECT_HOSTS:
         return f"{Colors.OKGREEN}⚡ Fast{Colors.ENDC}"
     if host in DIRECT_FILE_HOSTS:
         return f"{Colors.WARNING}Single file{Colors.ENDC}"

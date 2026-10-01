@@ -91,6 +91,17 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
     position_ctx = _TqdmPosition()
     tqdm_position = position_ctx.__enter__()
     try:
+        if automatic_mp4 is False and use_ts_threading is False:
+            if interactive:
+                tqdm.write(f"\n{Colors.BOLD}{Colors.OKCYAN}Threaded Download Option{Colors.ENDC}")
+                print_status("Threaded downloading is faster but should not be used on weak Wi-Fi.", "info")
+                use_threads = input(f"{Colors.BOLD}Use threaded download for faster performance? (y/n, default: n): {Colors.ENDC}").strip().lower()
+                use_threads = use_threads in ['y', 'yes', '1']
+            else:
+                use_threads = False
+        else:
+            use_threads = use_ts_threading
+
         if 'm3u8' in video_url:
             from urllib.parse import urljoin
 
@@ -147,20 +158,11 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                 print_status("No .ts segments found in M3U8 playlist", "error")
                 return False, None
             
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            dir_name = os.path.dirname(save_path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
             temp_ts_path = save_path.replace('.mp4', '.ts')
             random_string = os.path.basename(save_path).replace('.mp4', '.ts')
-
-            if automatic_mp4 is False and use_ts_threading is False:
-                if interactive:
-                    tqdm.write(f"\n{Colors.BOLD}{Colors.OKCYAN}Threaded Download Option{Colors.ENDC}")
-                    print_status("Threaded downloading is faster but should not be used on weak Wi-Fi.", "info")
-                    use_threads = input(f"{Colors.BOLD}Use threaded download for faster performance? (y/n, default: n): {Colors.ENDC}").strip().lower()
-                    use_threads = use_threads in ['y', 'yes', '1']
-                else:
-                    use_threads = False
-            else:
-                use_threads = use_ts_threading
             
             if use_threads:
                 segment_data = []
@@ -216,14 +218,126 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
             _report_episode_done(random_string)
             return True, temp_ts_path
         else:
+            dir_name = os.path.dirname(save_path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
+
+            total_size = 0
+            supports_ranges = False
+
+            if use_threads:
+                try:
+                    probe_headers = dict(headers)
+                    probe_headers['Range'] = 'bytes=0-0'
+                    probe_resp = requests.get(video_url, headers=probe_headers, timeout=15, stream=True)
+                    if probe_resp.status_code == 206:
+                        content_range = probe_resp.headers.get('Content-Range', '')
+                        if '/' in content_range:
+                            total_str = content_range.split('/')[-1]
+                            if total_str.isdigit():
+                                total_size = int(total_str)
+                                supports_ranges = True
+                    probe_resp.close()
+                except Exception:
+                    pass
+
+                if not supports_ranges or total_size <= 0:
+                    try:
+                        head_resp = requests.head(video_url, headers=headers, timeout=15, allow_redirects=True)
+                        if head_resp.status_code == 200:
+                            total_size = int(head_resp.headers.get('content-length', 0))
+                            supports_ranges = head_resp.headers.get('accept-ranges', '').lower() == 'bytes'
+                    except Exception:
+                        pass
+
+            if use_threads and supports_ranges and total_size > 0:
+                max_workers = 16
+                chunk_size = 2 * 1024 * 1024 if total_size >= 16 * 1024 * 1024 else 1024 * 1024
+                chunks = [
+                    (s, min(s + chunk_size - 1, total_size - 1))
+                    for s in range(0, total_size, chunk_size)
+                ]
+
+                with open(save_path, 'wb') as f:
+                    f.truncate(total_size)
+
+                file_lock = threading.Lock()
+                out_file = open(save_path, 'r+b')
+                download_failed = threading.Event()
+
+                def download_chunk(start, end, pbar):
+                    if download_failed.is_set():
+                        return False
+                    chunk_headers = dict(headers)
+                    chunk_headers['Range'] = f'bytes={start}-{end}'
+
+                    for attempt in range(3):
+                        if download_failed.is_set():
+                            return False
+                        try:
+                            with requests.get(video_url, headers=chunk_headers, stream=True, timeout=20) as resp:
+                                if resp.status_code != 206:
+                                    raise requests.RequestException(f"Expected 206 Partial Content, got {resp.status_code}")
+                                pos = start
+                                for block in resp.iter_content(chunk_size=128 * 1024):
+                                    if download_failed.is_set():
+                                        return False
+                                    if block:
+                                        with file_lock:
+                                            out_file.seek(pos)
+                                            out_file.write(block)
+                                        pos += len(block)
+                                        pbar.update(len(block))
+                                return True
+                        except Exception as e:
+                            if attempt < 2:
+                                time.sleep(1)
+                            else:
+                                print_status(f"Failed to download chunk {start}-{end}: {str(e)}", "error")
+                                download_failed.set()
+                                return False
+                    return False
+
+                try:
+                    with tqdm(
+                        total=total_size,
+                        unit='B',
+                        unit_scale=True,
+                        desc=f"📥 {os.path.basename(save_path)}",
+                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                        position=tqdm_position,
+                        leave=False
+                    ) as pbar:
+                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            futures = [
+                                executor.submit(download_chunk, start, end, pbar)
+                                for start, end in chunks
+                            ]
+                            for future in as_completed(futures):
+                                if not future.result():
+                                    download_failed.set()
+                finally:
+                    out_file.close()
+
+                if not download_failed.is_set():
+                    if _batch_total == 0:
+                        print_status("Download completed successfully!", "success")
+                    _report_episode_done(os.path.basename(save_path))
+                    return True, save_path
+
+                if os.path.exists(save_path):
+                    try:
+                        os.remove(save_path)
+                    except OSError:
+                        pass
+                print_status("Multi-threaded download encountered an issue, falling back to sequential stream...", "warning")
+
             response = requests.get(video_url, stream=True, headers=headers, timeout=30)
-            total_size = int(response.headers.get('content-length', 0))
-            
+            total_size = int(response.headers.get('content-length', total_size))
+
             if response.status_code != 200:
                 print_status(f"Download failed with status code: {response.status_code}", "error")
                 return False, None
-            
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
             with open(save_path, 'wb') as f:
                 with tqdm(
@@ -241,7 +355,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                             pbar.update(len(chunk))
 
             if _batch_total == 0:
-                print_status(f"Download completed successfully!", "success")
+                print_status("Download completed successfully!", "success")
             _report_episode_done(os.path.basename(save_path))
             return True, save_path
     except Exception as e:

@@ -176,13 +176,14 @@ def relevance(query, title):
     return max(covered * (0.9 if in_order else 0.7), ratio)
 
 def rank_results(query, results):
-    """Best match first inside each site, and the site holding the best match first overall."""
+    """Best match first inside each site; sites keep a fixed order (Anime-Sama, then Nakanime)."""
     by_site = {}
     for r in results:
         r['score'] = relevance(query, r['title'])
         by_site.setdefault(r.get('site') or '', []).append(r)
     groups = [sorted(g, key=lambda r: -r['score']) for g in by_site.values()]
-    groups.sort(key=lambda g: -g[0]['score'])
+    order = {'anime-sama': 0, 'nakanime': 1}
+    groups.sort(key=lambda g: order.get(g[0].get('site'), 99))
     return [r for g in groups for r in g]
 
 def search_anime(query, headers=None, site="all"):

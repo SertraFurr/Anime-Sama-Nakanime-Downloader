@@ -148,7 +148,6 @@ def search_anime_sama(queries, headers=None):
     if results:
         with ThreadPoolExecutor(max_workers=10) as executor:
             list(executor.map(lambda r: check_link_support(r, headers), results))
-        results = [r for r in results if r.get('support') != "Unsupported"]
     return results
 
 def _keywords(query):

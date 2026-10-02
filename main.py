@@ -3,6 +3,8 @@ from src.utils.print.print_status import print_status
 from src.var import Colors, get_domain, print_header, print_separator, print_tutorial, generate_requests_headers, SourceDomains
 from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled
 
+SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime"}
+
 def tutorial_input(domain=None):
     domain = domain or get_domain()
     print_status("No valid Cloudflare cookies found. Let's set them up!", "info")
@@ -614,7 +616,7 @@ def main():
             ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
             for i, res in enumerate(ordered, 1):
                 if i == 1 or res.get('site') != ordered[i - 2].get('site'):
-                    print(f"{Colors.BOLD}--- {res.get('site') or 'Other'} ---{Colors.ENDC}")
+                    print(f"\n{Colors.BOLD}-- {SITE_DISPLAY_NAMES.get(res.get('site'), res.get('site') or 'Other')} --{Colors.ENDC}")
                 support_text = ""
                 if res.get('support') == "Anime Supported":
                     support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"
@@ -668,7 +670,7 @@ def main():
                     ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
                     for i, res in enumerate(ordered, 1):
                          if i == 1 or res.get('site') != ordered[i - 2].get('site'):
-                             print(f"{Colors.BOLD}--- {res.get('site') or 'Other'} ---{Colors.ENDC}")
+                             print(f"\n{Colors.BOLD}-- {SITE_DISPLAY_NAMES.get(res.get('site'), res.get('site') or 'Other')} --{Colors.ENDC}")
                          support_text = ""
                          if res.get('support') == "Anime Supported":
                              support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"

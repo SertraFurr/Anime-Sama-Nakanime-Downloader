@@ -2,6 +2,7 @@ import requests
 import re
 import json
 import urllib.parse
+import difflib
 from bs4 import BeautifulSoup
 from src.var import get_domain, print_status
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +27,7 @@ def decode_nakanime_response(response_bytes, url_path):
         out[i] = response_bytes[i] ^ key_bytes[i % len(key_bytes)]
     return bytes(out)
 
-def search_nakanime(query, headers=None):
+def _search_nakanime_one(query, headers=None):
     encoded_query = urllib.parse.quote(query)
     path = f"/api/catalog/search?q={encoded_query}&sort=relevance&page=1&per_page=32"
     url = f"https://nakanime.tv{path}"
@@ -107,7 +108,7 @@ def check_link_support(res, headers):
         res['support'] = "Unknown"
     return res
 
-def search_anime_sama(query, headers=None):
+def _search_anime_sama_one(query, headers=None):
     url = f"https://{get_domain()}/template-php/defaut/fetch.php"
 
     data = {"query": query}
@@ -125,24 +126,82 @@ def search_anime_sama(query, headers=None):
                 full_url = urljoin(f"https://{get_domain()}/", href)
                 results.append({"title": title, "url": full_url, "support": None, "site": "anime-sama"})
         
-        if results:
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                list(executor.map(lambda r: check_link_support(r, headers), results))
-                
         return results
     except Exception:
         return []
 
+def _dedupe(results):
+    seen, out = set(), []
+    for r in results:
+        if r['url'] not in seen:
+            seen.add(r['url'])
+            out.append(r)
+    return out
+
+def search_nakanime(queries, headers=None):
+    queries = [queries] if isinstance(queries, str) else queries
+    return _dedupe([r for q in queries for r in _search_nakanime_one(q, headers)])
+
+def search_anime_sama(queries, headers=None):
+    queries = [queries] if isinstance(queries, str) else queries
+    results = _dedupe([r for q in queries for r in _search_anime_sama_one(q, headers)])
+    if results:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(lambda r: check_link_support(r, headers), results))
+    return results
+
+def _keywords(query):
+    """The full query plus each keyword alone, so 'king raid' also finds "King's Raid"."""
+    words = [w for w in _norm(query).split() if len(w) >= 3]
+    return [query] + [w for w in dict.fromkeys(words) if w != _norm(query)]
+
+def _norm(text):
+    return re.sub(r'[^a-z0-9 ]', '', text.lower().replace("'", "").replace("-", " "))
+
+def relevance(query, title):
+    q, t = _norm(query), _norm(title)
+    if not q or not t:
+        return 0.0
+    t_tokens = t.split()
+    q_tokens = [w for w in q.split() if len(w) >= 3] or q.split()
+    positions = []
+    for qt in q_tokens:
+        pos = next((i for i, tt in enumerate(t_tokens) if tt.startswith(qt)), None)
+        if pos is not None:
+            positions.append(pos)
+    covered = len(positions) / len(q_tokens)
+    in_order = len(positions) == len(q_tokens) and positions == sorted(positions)
+    ratio = difflib.SequenceMatcher(None, q.replace(" ", ""), t.replace(" ", "")).ratio()
+    return max(covered * (0.9 if in_order else 0.7), ratio)
+
+MIN_SCORE = 0.5
+MIN_PER_SITE = 3
+
+def rank_results(query, results):
+    """Best match first inside each site; sites keep a fixed order (Anime-Sama, then Nakanime)."""
+    by_site = {}
+    for r in results:
+        r['score'] = relevance(query, r['title'])
+        by_site.setdefault(r.get('site') or '', []).append(r)
+    groups = []
+    for g in by_site.values():
+        g = sorted(g, key=lambda r: -r['score'])
+        groups.append([r for i, r in enumerate(g) if i < MIN_PER_SITE or r['score'] >= MIN_SCORE])
+    order = {'anime-sama': 0, 'nakanime': 1}
+    groups.sort(key=lambda g: order.get(g[0].get('site'), 99))
+    return [r for g in groups for r in g]
+
 def search_anime(query, headers=None, site="all"):
+    queries = _keywords(query)
     if site and site.lower() == "nakanime":
-        return search_nakanime(query, headers=headers)
+        return rank_results(query, search_nakanime(queries, headers=headers))
     if site and site.lower() == "anime-sama":
-        return search_anime_sama(query, headers=headers)
+        return rank_results(query, search_anime_sama(queries, headers=headers))
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_sama = executor.submit(search_anime_sama, query, headers)
-        future_naka = executor.submit(search_nakanime, query, headers)
+        future_sama = executor.submit(search_anime_sama, queries, headers)
+        future_naka = executor.submit(search_nakanime, queries, headers)
         results_sama = future_sama.result()
         results_naka = future_naka.result()
 
-    return results_sama + results_naka
+    return rank_results(query, results_sama + results_naka)

@@ -4,6 +4,9 @@ import requests
 import urllib.parse
 from urllib.parse import urljoin
 from src.var import get_domain
+from src.utils.config.config import get_domain_cookies
+
+NAKANIME_DOMAIN = "nakanime.tv"
 
 cO = "nkapiv1"
 
@@ -34,12 +37,24 @@ def expand_nakanime_url(url, headers=None):
     req_headers = {"User-Agent": "Mozilla/5.0"}
     if headers and "User-Agent" in headers:
         req_headers["User-Agent"] = headers["User-Agent"]
-        
+    # a caller-supplied headers dict (e.g. fallback.py's) may carry a Cookie
+    # for a different domain - an explicit Cookie header beats cookies= in
+    # requests, so the stale cookie would silently win over the one we set below.
+    req_headers.pop("Cookie", None)
+    req_headers.pop("cookie", None)
+
+    nk_cookies = None
+    stored = get_domain_cookies(NAKANIME_DOMAIN)
+    if stored:
+        cf_clearance, stored_headers = stored
+        req_headers["User-Agent"] = stored_headers["User-Agent"]
+        nk_cookies = {"cf_clearance": cf_clearance}
+
     seasons = set()
 
     try:
         url_page = f"https://nakanime.tv/anime/{anime_id}/season/1/episode/1"
-        res_page = requests.get(url_page, headers=req_headers, timeout=10)
+        res_page = requests.get(url_page, headers=req_headers, cookies=nk_cookies, timeout=10)
         scripts = re.findall(r'<script[^>]*>(.*?)</script>', res_page.text, re.DOTALL)
         for s in scripts:
             if 'animeId' in s and 'seasons' in s:
@@ -59,7 +74,7 @@ def expand_nakanime_url(url, headers=None):
         try:
             path = f"/api/anime/{anime_id}/episodes"
             api_url = f"https://nakanime.tv{path}"
-            res = requests.get(api_url, headers=req_headers, timeout=10)
+            res = requests.get(api_url, headers=req_headers, cookies=nk_cookies, timeout=10)
             res.raise_for_status()
             decrypted = decode_nakanime_response(res.content, path)
             data = json.loads(decrypted.decode('utf-8'))

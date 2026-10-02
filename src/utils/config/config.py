@@ -56,6 +56,55 @@ def set_setting(key, value):
         json.dump(config, f, indent=4)
 
 
+def get_domain_cookies(domain):
+    """Generic per-domain cf_clearance store (used for sites other than the
+    main configured domain, e.g. nakanime.tv) - separate from the single
+    cf_clearance_cookie/headers pair above so setting one site's cookie never
+    overwrites another's."""
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+        entry = config.get('domain_cookies', {}).get(domain)
+        if not entry or not entry.get('cf_clearance') or not entry.get('user_agent'):
+            return False
+        return entry['cf_clearance'], {"User-Agent": entry['user_agent']}
+    except FileNotFoundError:
+        return False
+
+
+def set_domain_cookies(domain, cf_clearance_value, user_agent_value):
+    config = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+
+    store = config.setdefault('domain_cookies', {})
+    store[domain] = {"cf_clearance": cf_clearance_value, "user_agent": user_agent_value}
+
+    with open(CONFIG_PATH, 'w') as f:
+        json.dump(config, f, indent=4)
+
+
+def check_domain_cookies(domain, headers):
+    stored = get_domain_cookies(domain)
+    if stored is False:
+        return False
+
+    cf_clearance_value, stored_headers = stored
+
+    if headers.get("User-Agent") != stored_headers.get("User-Agent"):
+        return False
+
+    request_headers = headers.copy()
+    request_headers['Cookie'] = f'cf_clearance={cf_clearance_value}'
+
+    try:
+        req = requests.get(f"https://{domain}", headers=request_headers, timeout=10)
+        return req.status_code != 403
+    except requests.RequestException:
+        return False
+
+
 def check_cookies(domain, headers):
     stored = get_cookies()
     if stored is False:

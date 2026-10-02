@@ -4,6 +4,9 @@ import time
 import requests
 import urllib.parse
 from src.var import print_status
+from src.utils.config.config import get_domain_cookies
+
+NAKANIME_DOMAIN = "nakanime.tv"
 
 cO = "nkapiv1"
 
@@ -28,7 +31,21 @@ def _get_nakanime_session_and_headers(headers=None):
     req_headers = {"User-Agent": "Mozilla/5.0"}
     if headers and "User-Agent" in headers:
         req_headers["User-Agent"] = headers["User-Agent"]
+
     session = requests.Session()
+
+    # nakanime.tv started sitting behind a Cloudflare challenge that a plain
+    # requests session can't solve - if the user has gone through the manual
+    # cf_clearance setup (main.py prompts for this once per Cloudflare
+    # expiry), reuse it here automatically. The cookie is only valid for the
+    # exact User-Agent it was solved with, so that takes priority over
+    # whatever caller passed in - a mismatched UA would just fail again.
+    stored = get_domain_cookies(NAKANIME_DOMAIN)
+    if stored:
+        cf_clearance, stored_headers = stored
+        req_headers["User-Agent"] = stored_headers["User-Agent"]
+        session.cookies.set("cf_clearance", cf_clearance, domain=NAKANIME_DOMAIN)
+
     session.headers.update(req_headers)
     return session, req_headers
 

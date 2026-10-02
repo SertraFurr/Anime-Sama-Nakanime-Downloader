@@ -613,7 +613,7 @@ def main():
                 return 1
             print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
             print_separator()
-            ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
+            ordered = [r for site in dict.fromkeys(r.get('site') for r in results) for r in results if r.get('site') == site]
             for i, res in enumerate(ordered, 1):
                 if i == 1 or res.get('site') != ordered[i - 2].get('site'):
                     print(f"\n{Colors.BOLD}-- {SITE_DISPLAY_NAMES.get(res.get('site'), res.get('site') or 'Other')} --{Colors.ENDC}")
@@ -667,7 +667,7 @@ def main():
                     
                     print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
                     print_separator()
-                    ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
+                    ordered = [r for site in dict.fromkeys(r.get('site') for r in results) for r in results if r.get('site') == site]
                     for i, res in enumerate(ordered, 1):
                          if i == 1 or res.get('site') != ordered[i - 2].get('site'):
                              print(f"\n{Colors.BOLD}-- {SITE_DISPLAY_NAMES.get(res.get('site'), res.get('site') or 'Other')} --{Colors.ENDC}")

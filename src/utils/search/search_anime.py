@@ -2,6 +2,7 @@ import requests
 import re
 import json
 import urllib.parse
+import difflib
 from bs4 import BeautifulSoup
 from src.var import get_domain, print_status
 from concurrent.futures import ThreadPoolExecutor
@@ -128,16 +129,39 @@ def search_anime_sama(query, headers=None):
         if results:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 list(executor.map(lambda r: check_link_support(r, headers), results))
-                
+            results = [r for r in results if r.get('support') != "Unsupported"]
+
         return results
     except Exception:
         return []
 
+def _norm(text):
+    return re.sub(r'[^a-z0-9 ]', '', text.lower().replace("'", "").replace("-", " "))
+
+def relevance(query, title):
+    q, t = _norm(query), _norm(title)
+    if not q or not t:
+        return 0.0
+    q_tokens, t_tokens = q.split(), t.split()
+    covered = sum(1 for qt in q_tokens if any(tt.startswith(qt) for tt in t_tokens)) / len(q_tokens)
+    ratio = difflib.SequenceMatcher(None, q.replace(" ", ""), t.replace(" ", "")).ratio()
+    return max(covered, ratio)
+
+def rank_results(query, results):
+    """Best match first inside each site, and the site holding the best match first overall."""
+    by_site = {}
+    for r in results:
+        r['score'] = relevance(query, r['title'])
+        by_site.setdefault(r.get('site') or '', []).append(r)
+    groups = [sorted(g, key=lambda r: -r['score']) for g in by_site.values()]
+    groups.sort(key=lambda g: -g[0]['score'])
+    return [r for g in groups for r in g]
+
 def search_anime(query, headers=None, site="all"):
     if site and site.lower() == "nakanime":
-        return search_nakanime(query, headers=headers)
+        return rank_results(query, search_nakanime(query, headers=headers))
     if site and site.lower() == "anime-sama":
-        return search_anime_sama(query, headers=headers)
+        return rank_results(query, search_anime_sama(query, headers=headers))
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_sama = executor.submit(search_anime_sama, query, headers)
@@ -145,4 +169,4 @@ def search_anime(query, headers=None, site="all"):
         results_sama = future_sama.result()
         results_naka = future_naka.result()
 
-    return results_sama + results_naka
+    return rank_results(query, results_sama + results_naka)

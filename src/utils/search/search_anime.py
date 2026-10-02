@@ -175,13 +175,19 @@ def relevance(query, title):
     ratio = difflib.SequenceMatcher(None, q.replace(" ", ""), t.replace(" ", "")).ratio()
     return max(covered * (0.9 if in_order else 0.7), ratio)
 
+MIN_SCORE = 0.5
+MIN_PER_SITE = 3
+
 def rank_results(query, results):
     """Best match first inside each site; sites keep a fixed order (Anime-Sama, then Nakanime)."""
     by_site = {}
     for r in results:
         r['score'] = relevance(query, r['title'])
         by_site.setdefault(r.get('site') or '', []).append(r)
-    groups = [sorted(g, key=lambda r: -r['score']) for g in by_site.values()]
+    groups = []
+    for g in by_site.values():
+        g = sorted(g, key=lambda r: -r['score'])
+        groups.append([r for i, r in enumerate(g) if i < MIN_PER_SITE or r['score'] >= MIN_SCORE])
     order = {'anime-sama': 0, 'nakanime': 1}
     groups.sort(key=lambda g: order.get(g[0].get('site'), 99))
     return [r for g in groups for r in g]

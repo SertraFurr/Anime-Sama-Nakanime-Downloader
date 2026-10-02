@@ -402,7 +402,7 @@ def plan_season(base_url, args, headers, interactive):
                 print_status("Using threading with M3U8.", "warning")
 
             if not args.fast:
-                 ts_thread_choice = input(f"{Colors.BOLD}Download .ts files simultaneously (fast)? (y/n): {Colors.ENDC}").strip().lower()
+                 ts_thread_choice = input(f"{Colors.BOLD}Download files simultaneously (fast)? (y/n): {Colors.ENDC}").strip().lower()
                  use_ts_threading = ts_thread_choice in ['t', 'threaded', '1', 'y', 'yes']
 
             if not args.mp4:

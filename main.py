@@ -611,22 +611,24 @@ def main():
                 return 1
             print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
             print_separator()
-            for i, res in enumerate(results, 1):
+            ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
+            for i, res in enumerate(ordered, 1):
+                if i == 1 or res.get('site') != ordered[i - 2].get('site'):
+                    print(f"{Colors.BOLD}--- {res.get('site') or 'Other'} ---{Colors.ENDC}")
                 support_text = ""
                 if res.get('support') == "Anime Supported":
                     support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"
                 elif res.get('support') == "Scans Supported":
                     support_text = f" {Colors.OKGREEN}(Scans Supported){Colors.ENDC}"
-                site_tag = f" [{res.get('site')}]" if res.get('site') else ""
-                print(f"{Colors.OKCYAN}{i}. {res['title']}{site_tag}{support_text} ({res['url']}){Colors.ENDC}")
-            
+                print(f"{Colors.OKCYAN}{i}. {res['title']}{support_text} ({res['url']}){Colors.ENDC}")
+
             while True:
                 try:
-                    choice = input(f"{Colors.BOLD}Select anime (1-{len(results)}): {Colors.ENDC}").strip()
+                    choice = input(f"{Colors.BOLD}Select anime (1-{len(ordered)}): {Colors.ENDC}").strip()
                     if choice.isdigit():
                         idx = int(choice) - 1
-                        if 0 <= idx < len(results):
-                            base_url = results[idx]['url']
+                        if 0 <= idx < len(ordered):
+                            base_url = ordered[idx]['url']
                             break
                     print_status("Invalid choice", "error")
                 except KeyboardInterrupt:
@@ -663,7 +665,10 @@ def main():
                     
                     print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
                     print_separator()
-                    for i, res in enumerate(results, 1):
+                    ordered = [r for _, r in sorted(enumerate(results), key=lambda pair: (pair[1].get('site') or '', pair[0]))]
+                    for i, res in enumerate(ordered, 1):
+                         if i == 1 or res.get('site') != ordered[i - 2].get('site'):
+                             print(f"{Colors.BOLD}--- {res.get('site') or 'Other'} ---{Colors.ENDC}")
                          support_text = ""
                          if res.get('support') == "Anime Supported":
                              support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"
@@ -673,17 +678,16 @@ def main():
                              support_text = f" {Colors.OKGREEN}(Anime & Scans Supported){Colors.ENDC}"
                          elif res.get('support') == "Unknown":
                              support_text = f" {Colors.FAIL}(Status Unknown){Colors.ENDC}"
-                         site_tag = f" [{res.get('site')}]" if res.get('site') else ""
-                         print(f"{Colors.OKCYAN}{i}. {res['title']}{site_tag}{support_text}{Colors.ENDC}")
-                    
+                         print(f"{Colors.OKCYAN}{i}. {res['title']}{support_text}{Colors.ENDC}")
+
                     valid_choice = False
                     while True:
-                        choice = input(f"{Colors.BOLD}Select anime (1-{len(results)}) or 'c' to cancel: {Colors.ENDC}").strip()
+                        choice = input(f"{Colors.BOLD}Select anime (1-{len(ordered)}) or 'c' to cancel: {Colors.ENDC}").strip()
                         if choice.lower() == 'c': break
                         if choice.isdigit():
                             idx = int(choice) - 1
-                            if 0 <= idx < len(results):
-                                base_url = results[idx]['url']
+                            if 0 <= idx < len(ordered):
+                                base_url = ordered[idx]['url']
                                 options = expand_catalogue_url(base_url, headers=headers)
                                 if options:
                                     anime_opts = []

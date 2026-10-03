@@ -1,12 +1,12 @@
 <div align="center"> 
 
-# Anime Downloader
+# FrenchAnime-Downloader
   
 <img src="https://img.shields.io/badge/Python-3.6+-blue.svg?style=for-the-badge&logo=python" alt="Python Version">
 <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux_(mostly_windows)-lightgrey.svg?style=for-the-badge" alt="Platform">
 <img src="https://img.shields.io/badge/License-GPL_3-green.svg?style=for-the-badge" alt="License">
  
-**A powerful, beautiful and simple CLI tool to download anime episodes from Anime-Sama & Nakanime. (More coming)**
+**A powerful, beautiful and simple CLI tool to download anime episodes from Anime-Sama, FRAnime & Nakanime. (More coming)**
 
 (✨55 STARS✨! Thanks!) 
 
@@ -82,10 +82,10 @@ pip install requests beautifulsoup4 tqdm
 
 ```bash
 # 1. Clone the repository.
-git clone https://github.com/SertraFurr/Anime-Sama-Nakanime-Downloader.git
+git clone https://github.com/SertraFurr/FrenchAnime-Downloader.git
 
 # 2. Navigate into the project directory.
-cd Anime-Downloader
+cd FrenchAnime-Downloader
 
 # 3. Run it.
 python3 main.py
@@ -150,7 +150,7 @@ python main.py --search "one piece" --player "Sibnet" --episodes "all" --threads
 ###  Find Anime
 <img src="https://img.shields.io/badge/Step-1-blue?style=for-the-badge">
 
-Visit **[Anime-Sama](https://anime-sama.fr/catalogue/)** or **[Nakanime](https://nakanime.tv/)**
+Visit **[Anime-Sama](https://anime-sama.fr/catalogue/)**,**[FRAnime](https://franime.fr/)  or **[Nakanime](https://nakanime.tv/)**
 
 - Search your anime  
 - Select season & language  
@@ -324,14 +324,14 @@ We welcome contributions! Here's how you can help:
 
 
 ### 🐛 Found a Bug?
- Check existing [issues](https://github.com/sertrafurr/Anime-Downloader/issues)
+ Check existing [issues](https://github.com/sertrafurr/FrenchAnime-Downloader/issues)
  Create a new issue with:
    📝 Clear description
    🔄 Steps to reproduce
    💻 System information
 
 ### 💡 Feature Request?
- Open a [discussion](https://github.com/sertrafurr/Anime-Downloader/discussions)
+ Open a [discussion](https://github.com/sertrafurr/FrenchAnime-Downloader/discussions)
  Explain your idea
  Community feedback welcome!
 

@@ -1,4 +1,5 @@
 import requests
+import time
 import re
 import json
 import urllib.parse
@@ -59,6 +60,19 @@ def _search_nakanime_one(query, headers=None):
     except Exception as e:
         print_status(f"Nakanime search failed: {str(e)}", "warning")
         return []
+
+def _search_franime_one(query, headers=None):
+    resultats=[]
+    try:
+         
+        data = _fetch_franime_catalogue(headers)
+        for a in data:
+            if query.lower() in texte(a):
+                resultats.append({"title":a["titleO"],"id":a["id"],"site":"franime","url":f"https://franime.fr/anime/test?anime_id={a['id']}","support":"Anime Supported"})
+
+        return resultats
+
+    except Exception as e: print(e); return []
 
 def check_link_support(res, headers):
     try:
@@ -142,6 +156,10 @@ def search_nakanime(queries, headers=None):
     queries = [queries] if isinstance(queries, str) else queries
     return _dedupe([r for q in queries for r in _search_nakanime_one(q, headers)])
 
+def search_franime(queries, headers=None):
+    queries = [queries] if isinstance(queries, str) else queries
+    return _dedupe([r for q in queries for r in _search_franime_one(q, headers)])
+
 def search_anime_sama(queries, headers=None):
     queries = [queries] if isinstance(queries, str) else queries
     results = _dedupe([r for q in queries for r in _search_anime_sama_one(q, headers)])
@@ -149,6 +167,40 @@ def search_anime_sama(queries, headers=None):
         with ThreadPoolExecutor(max_workers=10) as executor:
             list(executor.map(lambda r: check_link_support(r, headers), results))
     return results
+
+_FRANIME_CACHE = {"time": 0.0, "data": []}
+_FRANIME_CACHE_SECONDS = 600
+
+
+def _fetch_franime_catalogue(headers=None):
+    # The whole catalogue is several MB and a search asks for it once per
+    # keyword (and the season/episode steps again), so keep it for a few minutes.
+    if _FRANIME_CACHE["data"] and time.time() - _FRANIME_CACHE["time"] < _FRANIME_CACHE_SECONDS:
+        return _FRANIME_CACHE["data"]
+
+    req_headers = {"User-Agent": "Mozilla/5.0"}
+    if headers and "User-Agent" in headers:
+        req_headers["User-Agent"] = headers["User-Agent"]
+    try:
+        r = requests.get(
+            "https://api.franime.fr/api/animes",
+            headers=req_headers,
+            timeout=60,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(e)
+        return []
+
+    _FRANIME_CACHE["time"] = time.time()
+    _FRANIME_CACHE["data"] = data
+    return data
+
+
+def texte(a):
+    parts = [a.get("title"), a.get("titleO")] + list((a.get("titles") or {}).values())
+    return " ".join(p for p in parts if isinstance(p, str)).lower()
 
 def _keywords(query):
     """The full query plus each keyword alone, so 'king raid' also finds "King's Raid"."""
@@ -187,7 +239,7 @@ def rank_results(query, results):
     for g in by_site.values():
         g = sorted(g, key=lambda r: -r['score'])
         groups.append([r for i, r in enumerate(g) if i < MIN_PER_SITE or r['score'] >= MIN_SCORE])
-    order = {'anime-sama': 0, 'nakanime': 1}
+    order = {'anime-sama': 0, 'nakanime': 1, 'franime': 2}
     groups.sort(key=lambda g: order.get(g[0].get('site'), 99))
     return [r for g in groups for r in g]
 
@@ -197,11 +249,15 @@ def search_anime(query, headers=None, site="all"):
         return rank_results(query, search_nakanime(queries, headers=headers))
     if site and site.lower() == "anime-sama":
         return rank_results(query, search_anime_sama(queries, headers=headers))
+    if site and site.lower() == "franime":
+        return rank_results(query, search_franime(queries, headers=headers))
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         future_sama = executor.submit(search_anime_sama, queries, headers)
         future_naka = executor.submit(search_nakanime, queries, headers)
+        future_franime = executor.submit(search_franime, queries, headers)
         results_sama = future_sama.result()
         results_naka = future_naka.result()
+        results_franime = future_franime.result()
 
-    return rank_results(query, results_sama + results_naka)
+    return rank_results(query, results_sama + results_naka + results_franime)

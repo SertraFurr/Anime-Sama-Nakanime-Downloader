@@ -1,9 +1,9 @@
 from src.utils.config.config import get_cookies, set_cookies, check_cookies, get_domain_cookies, set_domain_cookies, check_domain_cookies
 from src.utils.print.print_status import print_status
 from src.var import Colors, get_domain, print_header, print_separator, print_tutorial, generate_requests_headers, SourceDomains
-from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled
+from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled, check_if_url_blocked
 
-SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime"}
+SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime", "franime": "FRAnime"}
 
 def tutorial_input(domain=None):
     domain = domain or get_domain()
@@ -12,17 +12,17 @@ def tutorial_input(domain=None):
     print_status("2. Press F12 to open Developer Tools.", "info")
     print_status(f"3. Go to the 'Application' tab → Cookies → select {domain}.", "info")
     print_status("4. Copy the value of the 'cf_clearance' cookie.", "info")
-    cf_clearance = input("Paste the cf_clearance value here: ").strip()
+    cf_clearance = input("Paste the cf_clearance value here: ").strip().strip("'\"")
 
     print_status("5. In DevTools Console (F12 → Console), run:", "info")
     print_status("   navigator.userAgent", "info")
-    print_status("6. Copy the User-Agent string printed in console WITHOUT the ' .", "info")
-    user_agent = input("Paste the User-Agent here: ").strip()
+    print_status("6. Copy the User-Agent string printed in console (with or without the quotes).", "info")
+    user_agent = input("Paste the User-Agent here: ").strip().strip("'\"")
 
     return cf_clearance, user_agent
 
 
-def ensure_domain_cookies(domain):
+def ensure_domain_cookies(domain, test_url=None, extra_headers=None):
     """Any site (not just the main configured domain) can turn out to sit
     behind its own Cloudflare challenge - same manual cf_clearance dance as
     the startup check above, reusable for whichever domain needs it, each
@@ -32,14 +32,14 @@ def ensure_domain_cookies(domain):
     stored = get_domain_cookies(domain)
     if stored:
         request_headers = {"User-Agent": stored[1]["User-Agent"]}
-        if check_domain_cookies(domain, request_headers):
+        if check_domain_cookies(domain, request_headers, test_url, extra_headers):
             return
 
     print_status(f"{domain} is behind Cloudflare too - needs its own cookie.", "info")
     while True:
         cf_clearance, user_agent = tutorial_input(domain=domain)
         set_domain_cookies(domain, cf_clearance, user_agent)
-        if check_domain_cookies(domain, {"User-Agent": user_agent}):
+        if check_domain_cookies(domain, {"User-Agent": user_agent}, test_url, extra_headers):
             print_status(f"{domain} cookies are valid.", "success")
             return
         print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
@@ -79,12 +79,21 @@ if len(_sys.argv) == 1:
     if check_if_cloudflare_enabled(domain="nakanime.tv", headers={"User-Agent": "Mozilla/5.0"}):
         ensure_domain_cookies("nakanime.tv")
 
+    # Franime: only its API is behind the challenge (the home page is open), so
+    # test an API URL instead of the home page.
+    from src.utils.fetch.fetch_episodes import FRANIME_TEST_URL, FRANIME_API_HEADERS
+    print("Checking if cloudflare is enabled on franime.fr..")
+    if check_if_url_blocked(FRANIME_TEST_URL, {"User-Agent": "Mozilla/5.0", **FRANIME_API_HEADERS}):
+        ensure_domain_cookies("franime.fr", test_url=FRANIME_TEST_URL, extra_headers=FRANIME_API_HEADERS)
+
 import os
 import re
 import sys
 import argparse
 from concurrent.futures                         import ThreadPoolExecutor, as_completed
 from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count, fetch_nakanime_available_count
+from src.utils.fetch.fetch_episodes             import fetch_franime_episode_count, FRANIME_TEST_URL, FRANIME_API_HEADERS
+from src.utils.search.expand_catalogue          import extract_franime_season
 from src.utils.fetch.fetch_video_source         import fetch_video_source
 from src.utils.get.get_player_choice            import get_player_choice, is_fast_player
 from src.utils.get.get_episode_choice           import get_episode_choice
@@ -211,6 +220,35 @@ def plan_season(base_url, args, headers, interactive):
                         if indices:
                             wanted_episodes = {i + 1 for i in indices}
 
+    # Franime : une saison peut compter des centaines d'episodes (Conan : 1211)
+    # et chacun coute plusieurs requetes, comme pour Nakanime on demande donc
+    # lesquels AVANT le fetch. Le catalogue donne deja le nombre d'episodes.
+    elif 'franime.fr' in base_url.lower():
+        if interactive:
+            ensure_domain_cookies("franime.fr", test_url=FRANIME_TEST_URL, extra_headers=FRANIME_API_HEADERS)
+        nb_episodes = fetch_franime_episode_count(base_url, headers=headers)
+        if nb_episodes:
+            selection_str = None
+            if args.latest:
+                selection_str = str(nb_episodes)
+            elif args.episodes:
+                selection_str = args.episodes
+            elif interactive:
+                selection_str = input(
+                    f"{Colors.BOLD}This season has {nb_episodes} episodes. "
+                    f"Which ones do you want (1-{nb_episodes}, comma-separated, ranges like 12-49, or 'all')? "
+                    f"{Colors.ENDC}"
+                ).strip()
+                args.episodes = selection_str
+
+            if selection_str:
+                if selection_str.lower() == 'all':
+                    wanted_episodes = set(range(1, nb_episodes + 1))
+                else:
+                    indices = parse_selection_indices(selection_str, nb_episodes)
+                    if indices:
+                        wanted_episodes = {i + 1 for i in indices}
+
     episodes = fetch_episodes(base_url, headers=headers, wanted_episodes=wanted_episodes)
     if not episodes:
         print_status("Failed to fetch episodes.", "error")
@@ -305,6 +343,8 @@ def plan_season(base_url, args, headers, interactive):
     if 'nakanime.tv' in base_url.lower() or 'nakanime.fr' in base_url.lower():
         m_season = re.search(r'/season/(\d+)', base_url)
         get_saison_info = f"saison{m_season.group(1)}" if m_season else "saison1"
+    elif 'franime.fr' in base_url.lower():
+        get_saison_info = f"saison{extract_franime_season(base_url)}"
     else:
         get_saison_info = base_url.split('/')[-3]
 
@@ -385,6 +425,11 @@ def plan_season(base_url, args, headers, interactive):
     use_ts_threading = args.fast
     automatic_mp4 = args.mp4
     pre_selected_tool = args.tool
+    if automatic_mp4 and not pre_selected_tool and not interactive:
+        # no keyboard to answer the "Tool (1=av, 2=ffmpeg)" prompt (fallback.py
+        # runs us with --mp4): take the prompt's own default instead of
+        # failing the .ts -> .mp4 conversion
+        pre_selected_tool = 'av'
 
     if interactive:
         if len(episode_indices) > 1 and not args.threads:

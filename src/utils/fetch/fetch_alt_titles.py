@@ -53,7 +53,27 @@ def _fetch_nakanime_alt_titles(base_url, headers=None):
     return []
 
 
+def _fetch_franime_alt_titles(base_url, headers=None):
+    from src.utils.search.expand_catalogue import extract_franime_id, find_franime_anime
+    try:
+        anime = find_franime_anime(extract_franime_id(base_url), headers)
+    except (KeyError, ValueError):
+        return []
+    if not anime:
+        return []
+    names = []
+    for value in [anime.get("title"), anime.get("titleO")] + list((anime.get("titles") or {}).values()):
+        if isinstance(value, str) and value.strip() and value.strip() not in names:
+            names.append(value.strip())
+    # the catalogue lists the title in dozens of languages; only latin ones help
+    # the TVDB/IMDb lookup, and a handful is plenty
+    return [n for n in names if n.isascii()][:8]
+
+
 def fetch_alt_titles(base_url, headers=None):
+    if 'franime.fr' in base_url.lower():
+        return _fetch_franime_alt_titles(base_url, headers=headers)
+
     if 'nakanime.tv' in base_url.lower() or 'nakanime.fr' in base_url.lower():
         return _fetch_nakanime_alt_titles(base_url, headers=headers)
 

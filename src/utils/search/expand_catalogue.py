@@ -2,7 +2,7 @@ import re
 import json
 import requests
 import urllib.parse
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 from src.var import get_domain
 from src.utils.config.config import get_domain_cookies
 
@@ -98,6 +98,62 @@ def expand_nakanime_url(url, headers=None):
         })
     return results
 
+def extract_franime_id(url):
+    morceaux = urlparse(url)
+    params2 = parse_qs(morceaux.query)
+    return int(params2["anime_id"][0])
+
+
+def extract_franime_season(url):
+    morceaux = urlparse(url)
+    params2 = parse_qs(morceaux.query)
+    return params2.get("s", ["1"])[0]
+
+
+def find_franime_anime(anime_id, headers=None):
+    from src.utils.search.search_anime import _fetch_franime_catalogue
+    data = _fetch_franime_catalogue(headers)
+
+    for a in data:
+        if a["id"] == anime_id:
+            return a
+    return None
+
+def extraire_numero(titre):
+    liste = re.findall(r"\d+(?:\.\d+)?", titre)
+
+    if not liste:
+        return None
+    return liste[-1]
+
+
+def trouver_position_saison(anime, s):
+    """L'API de franime veut la position (0, 1, ...) de la saison dans la liste,
+    alors que l'adresse porte son numero (s=1, s=1.1)."""
+    for i, saison in enumerate(anime["saisons"]):
+        numero = extraire_numero(saison["title"])
+        if numero == s:
+            return i
+    return None
+
+
+def expand_franime_url(url, headers=None):
+    saisons=[]
+    anime_id = extract_franime_id(url)
+    anime = find_franime_anime(anime_id, headers)
+
+    if anime is None:
+        return []
+
+    for saison in anime["saisons"]:
+        numero = extraire_numero(saison["title"])
+        if numero is None:
+            continue
+
+        saisons.append({"name": f"Saison {numero}", "url": f"https://franime.fr/anime/test?s={numero}&anime_id={anime_id}"})
+
+    return saisons
+
 def is_valid_season(url, headers):
     try:
         ep_url = url.rstrip('/') + '/episodes.js'
@@ -165,6 +221,9 @@ def get_matches_from_page(url, headers):
 def expand_catalogue_url(url, headers=None):
     if 'nakanime.tv' in url.lower():
         return expand_nakanime_url(url, headers)
+
+    if 'franime.fr' in url.lower():
+        return expand_franime_url(url, headers)
 
     raw_matches = get_matches_from_page(url, headers)
     

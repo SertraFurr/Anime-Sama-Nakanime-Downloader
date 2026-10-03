@@ -56,6 +56,22 @@ def _speed_hint(player_key, urls=None):
     return None
 
 
+def _find_fake_episodes(rows):
+    """{player: fake episode numbers} for hosts known to serve a placeholder
+    clip instead of the episode (detected before the user picks the player)."""
+    from src.utils.check.detect_placeholder_sources import find_placeholder_episodes
+    checkable = [(p, u, w) for p, u, w in rows if _detect_host(p, u) == "sendvid" and w]
+    if not checkable:
+        return {}
+    print_status("Checking Sendvid for fake episodes...", "loading")
+    fakes = {}
+    for player, urls, working in checkable:
+        bad = find_placeholder_episodes("sendvid", urls, working)
+        if bad:
+            fakes[player] = bad
+    return fakes
+
+
 def get_player_choice(episodes, wanted_episodes=None):
     available_players = list(episodes.keys())
     # Si seule une partie de la saison a ete demandee/fetchee, summarize_players
@@ -73,8 +89,9 @@ def get_player_choice(episodes, wanted_episodes=None):
 
     shown = display_names(rows)
     name_width = max((len(n) for n in shown), default=0)
+    fakes = _find_fake_episodes(rows)
     for i, ((player, urls, working), name) in enumerate(zip(rows, shown), 1):
-        print(f"  {i}. {format_player_row(player, urls, working, available, name_width, display=name)}")
+        print(f"  {i}. {format_player_row(player, urls, working, available, name_width, display=name, fake=fakes.get(player))}")
     by_display_name = {n.lower(): p for n, p in zip(shown, available_players)}
 
 

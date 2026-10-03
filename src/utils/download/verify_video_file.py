@@ -2,6 +2,12 @@ import subprocess
 
 from src.var import print_status
 
+# Some hosts (seen with Sendvid) answer with a short "video unavailable" clip
+# instead of the episode: a perfectly valid file, so only its length gives it
+# away. 10s is far below any real episode (shortest ONA/specials last minutes)
+# and above the ~5s placeholder.
+MIN_VIDEO_SECONDS = 10
+
 
 def verify_video_file(path, timeout=30):
     """Sanity-check a downloaded/converted video file with ffprobe.
@@ -11,8 +17,8 @@ def verify_video_file(path, timeout=30):
     source stream) while the tool still reported success - this catches
     that instead of leaving a broken file mistaken for a good download.
 
-    Returns (True, None) if the file has a readable, non-zero duration,
-    otherwise (False, reason).
+    Returns (True, None) if the file has a readable duration of at least
+    MIN_VIDEO_SECONDS, otherwise (False, reason).
     """
     try:
         result = subprocess.run(
@@ -43,6 +49,9 @@ def verify_video_file(path, timeout=30):
 
     if duration <= 0:
         return False, f"invalid duration ({duration}s)"
+
+    if duration < MIN_VIDEO_SECONDS:
+        return False, f"only {duration:.0f}s long - likely a placeholder clip, not the episode"
 
     return True, None
 

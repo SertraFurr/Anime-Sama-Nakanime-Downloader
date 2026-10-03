@@ -11,7 +11,11 @@ def validate_anime_sama_url(url):
         r'^https?://(?:www\.)?nakanime\.tv/(?:anime/\d+|catalog\?.*overlay=).*$',
         re.IGNORECASE
     )
-    if anime_sama_pattern.match(url) or nakanime_pattern.match(url):
+    franime_pattern = re.compile(
+        r'^https?://(?:www\.)?franime\.fr/anime/[^/?]+\?.*anime_id=\d+.*$',
+        re.IGNORECASE
+    )
+    if anime_sama_pattern.match(url) or nakanime_pattern.match(url) or franime_pattern.match(url):
         return True, ""
     else:
         return False, (

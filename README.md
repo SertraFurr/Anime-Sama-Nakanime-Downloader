@@ -82,7 +82,7 @@ pip install requests beautifulsoup4 tqdm
 
 ```bash
 # 1. Clone the repository.
-git clone https://github.com/SertraFurr/Anime-Downloader.git
+git clone https://github.com/SertraFurr/Anime-Sama-Nakanime-Downloader.git
 
 # 2. Navigate into the project directory.
 cd Anime-Downloader

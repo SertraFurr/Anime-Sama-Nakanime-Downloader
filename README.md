@@ -229,12 +229,12 @@ Watch the magic happen
 | 🎬 **Embed4Me** | ![Working](https://img.shields.io/badge/Status-✅_Working-brightgreen) | HLS (.ts→mp4) | Download .ts then convert to mp4 |
 | 🎬 **AnsEmbed** | ![Working](https://img.shields.io/badge/Status-✅_Working-brightgreen) | HLS (.ts→mp4) | Download .ts then convert to mp4 |
 | 🎬 **OneUpload** | ![Working](https://img.shields.io/badge/Status-✅_Working-brightgreen) | HLS (.ts→mp4) | Download .ts then convert to mp4 |
+| 🎬 **Minochinos** | ![Working](https://img.shields.io/badge/Status-✅_Working-brightgreen) | HLS (.ts→mp4) | Download .ts then convert to mp4 |
 | 🎬 **MovearnPre** | ![Inconsistent](https://img.shields.io/badge/Status-➖_Inconsistent-orange) | HLS (.ts→mp4) | Download .ts then convert to mp4. INCONSISTENT |
 | 🎬 **SmoothPre** | ![Inconsistent](https://img.shields.io/badge/Status-➖_Inconsistent-orange) | HLS (.ts→mp4) | Download .ts then convert to mp4. INCONSISTENT |
 | 🎬 **Mivalyo** | ![Inconsistent](https://img.shields.io/badge/Status-➖_Inconsistent-orange) | HLS (.ts→mp4) | Download .ts then convert to mp4. INCONSISTENT |
 | 🎬 **Dingtezuni** | ![Inconsistent](https://img.shields.io/badge/Status-➖_Inconsistent-orange) | HLS (.ts→mp4) | Download .ts then convert to mp4. INCONSISTENT |
 | 🚫 **MYVI** | ![Deprecated](https://img.shields.io/badge/Status-❌_Deprecated-red) | - | Malicious - only redirects to ads |
-| 🚫 **Minochinos** | ![Unsupported](https://img.shields.io/badge/Status-❌_Unsupported-red) | - | Useless to implement |
 | 🤔 **VK.com** | ![Unsupported](https://img.shields.io/badge/Status-❌_Unsupported-red) | - | Could try, but no working URLs found |
 
 ---

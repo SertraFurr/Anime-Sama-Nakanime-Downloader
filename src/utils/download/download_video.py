@@ -46,6 +46,16 @@ def _report_episode_done(label):
     if not total:
         print_status(f"{label} assembled", "success")
 
+# A direct-file host (Sendvid...) can answer with a ~36 KB "video unavailable"
+# clip instead of the episode. Its size is known before downloading anything, so
+# refuse it up front (an episode, even a minute at low quality, is megabytes).
+MIN_VIDEO_BYTES = 200 * 1024
+
+
+def _is_placeholder_size(total_size):
+    return 0 < total_size < MIN_VIDEO_BYTES
+
+
 def download_video(video_url, save_path, use_ts_threading=False, url='',automatic_mp4=False, threaded_mp4=False, interactive=True):
     # "Starting download" is printed by the caller (download_episode.py) as
     # part of its single atomic per-episode header block, not here.
@@ -250,6 +260,10 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                     except Exception:
                         pass
 
+            if _is_placeholder_size(total_size):
+                print_status(f"Source is only {total_size} bytes - a placeholder, not the episode. Skipping this player.", "error")
+                return False, None
+
             if use_threads and supports_ranges and total_size > 0:
                 max_workers = 16
                 chunk_size = 2 * 1024 * 1024 if total_size >= 16 * 1024 * 1024 else 1024 * 1024
@@ -337,6 +351,11 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
 
             if response.status_code != 200:
                 print_status(f"Download failed with status code: {response.status_code}", "error")
+                return False, None
+
+            if _is_placeholder_size(total_size):
+                response.close()
+                print_status(f"Source is only {total_size} bytes - a placeholder, not the episode. Skipping this player.", "error")
                 return False, None
 
             with open(save_path, 'wb') as f:

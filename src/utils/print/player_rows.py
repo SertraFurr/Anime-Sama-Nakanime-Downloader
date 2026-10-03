@@ -61,14 +61,16 @@ def _domain_name(urls):
     return None
 
 
-def format_player_row(player, urls, working, available, name_width, display=None):
+def format_player_row(player, urls, working, available, name_width, display=None, fake=None):
     from src.utils.get.get_player_choice import is_fast_player
     fast = "⚡" if is_fast_player(player, urls) else " "
     player = display or player
     ranges = format_ranges(working)
     if len(ranges) > 40:
         ranges = ranges[:40].rsplit(",", 1)[0] + ", …"
-    if not working:
+    if fake:
+        color, mark, detail = Colors.FAIL, "!", f"Fake episodes detected ({format_ranges(fake)})"
+    elif not working:
         color, mark, detail = Colors.FAIL, "x", "Unavailable"
     elif len(working) == available:
         color, mark, detail = Colors.OKGREEN, "v", f"All ({ranges})"

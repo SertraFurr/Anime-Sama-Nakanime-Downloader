@@ -43,12 +43,21 @@ def find_existing_season_dir(anime_dir, saison_info):
     return candidates[0]
 
 
+def safe_folder_name(name):
+    """A site's title can hold characters Windows forbids in a folder name
+    ("King's Raid : Ishi wo ..." -> WinError 267 and every download failed).
+    ':' becomes ' - ' like Sonarr does, the other forbidden ones are dropped."""
+    name = re.sub(r'\s*:\s*', ' - ', str(name))
+    name = re.sub(r'[<>"/\|?*]', '', name)
+    return name.strip().rstrip('. ')
+
+
 def format_save_path(anime_name, saison_info, base_path=None):
     template = get_setting("save_template", "./videos/{anime}/{season}")
 
     fmt_args = {
-        "anime": anime_name if anime_name else "Unknown_Anime",
-        "season": saison_info if saison_info else "Unknown_Season"
+        "anime": safe_folder_name(anime_name) if anime_name else "Unknown_Anime",
+        "season": safe_folder_name(saison_info) if saison_info else "Unknown_Season"
     }
 
     if base_path:

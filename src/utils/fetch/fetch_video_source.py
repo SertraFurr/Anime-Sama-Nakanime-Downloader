@@ -93,7 +93,7 @@ def fetch_video_source(url):
                 return stream_url
             return None
 
-        if "minochinos.com" in single_url or "vidhide" in single_url:
+        if "minochinos.com" in single_url or "vidhide" in single_url or 'bingezove' in single_url:
             stream_url = extract_vidhide_video_source(single_url)
             if stream_url:
                 return stream_url

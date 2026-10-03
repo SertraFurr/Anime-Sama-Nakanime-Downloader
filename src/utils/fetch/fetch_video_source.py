@@ -19,7 +19,7 @@ from src.utils.extract.extract_voe_video_source        import extract_voe_video_
 from src.utils.extract.extract_filemoon_video_source   import extract_filemoon_video_source
 from src.utils.extract.extract_luluvdo_video_source   import extract_luluvdo_video_source
 from src.utils.extract.extract_vidzy_video_source     import extract_vidzy_video_source
-
+from src.utils.extract.extract_vidhide_video_source     import extract_vidhide_video_source
 try:
     from urllib3.exceptions import InsecureRequestWarning
     requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -89,6 +89,12 @@ def fetch_video_source(url):
         # FILEMOON EXTRACTION
         if 'bysesukior.com' in single_url or 'filemoon' in single_url or 'bysedikamoum.com' in single_url:
             stream_url = extract_filemoon_video_source(single_url)
+            if stream_url:
+                return stream_url
+            return None
+
+        if "minochinos.com" in single_url or "vidhide" in single_url:
+            stream_url = extract_vidhide_video_source(single_url)
             if stream_url:
                 return stream_url
             return None

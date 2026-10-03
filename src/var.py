@@ -16,7 +16,7 @@ class SourceDomains:
         "embed4me": ("Embed4me", ["embed4me.com", "embed4me"]),
         "uqload": ("Uqload", ["uqload.is", "uqload"]),
         "ansembed": ("AnsEmbed", ["ansembed.net"]),
-        "voe": ("Voe", ["voe"]),
+        "voe": ("Voe", ["voe","teresapoliticallearn"]),
         "filemoon": ("Filemoon", ["bysesukior.com", "filemoon", "bysedikamoum.com"]),
         "luluvdo": ("LuluStream", ["luluvdo.com", "lulustream.com", "lulu"]),
         "vidzy": ("Vidzy", ["vidzy.live", "vidzy.org", "vidzy"]),
@@ -48,7 +48,7 @@ class SourceDomains:
         if category and "voe" in str(category).lower():
             return True
         url_lower = str(url).lower()
-        if "voe" in url_lower:
+        if "voe" in url_lower or "teresapoliticallearn" in url_lower:
             return True
         import re
         if re.search(r'https?://[^/]+/e/[a-zA-Z0-9]+', url_lower):

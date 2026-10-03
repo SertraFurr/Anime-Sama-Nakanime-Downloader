@@ -425,6 +425,11 @@ def plan_season(base_url, args, headers, interactive):
     use_ts_threading = args.fast
     automatic_mp4 = args.mp4
     pre_selected_tool = args.tool
+    if automatic_mp4 and not pre_selected_tool and not interactive:
+        # no keyboard to answer the "Tool (1=av, 2=ffmpeg)" prompt (fallback.py
+        # runs us with --mp4): take the prompt's own default instead of
+        # failing the .ts -> .mp4 conversion
+        pre_selected_tool = 'av'
 
     if interactive:
         if len(episode_indices) > 1 and not args.threads:

@@ -3,7 +3,7 @@ from src.utils.print.print_status import print_status
 from src.var import Colors, get_domain, print_header, print_separator, print_tutorial, generate_requests_headers, SourceDomains
 from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled
 
-SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime"}
+SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime", "franime": "FRAnime"}
 
 def tutorial_input(domain=None):
     domain = domain or get_domain()

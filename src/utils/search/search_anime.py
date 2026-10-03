@@ -61,25 +61,10 @@ def _search_nakanime_one(query, headers=None):
         return []
 
 def _search_franime_one(query, headers=None):
-
-    req_headers = {"User-Agent": "Mozilla/5.0"}
-    if headers and "User-Agent" in headers:
-        req_headers["User-Agent"] = headers["User-Agent"]
+    resultats=[]
     try:
-        r = requests.get(
-            "https://api.franime.fr/api/animes",
-            headers=req_headers,
-            timeout=60,
-)   
-        resultats=[]
-        r.raise_for_status()
-
-        def texte(a):
-            parts = [a.get("title"), a.get("titleO")] + list((a.get("titles") or {}).values())
-            return " ".join(p for p in parts if isinstance(p, str)).lower()
-
-
-        data = r.json()
+         
+        data = _fetch_franime_catalogue(headers)
         for a in data:
             if query.lower() in texte(a):
                 resultats.append({"title":a["titleO"],"id":a["id"],"site":"franime","url":f"https://franime.fr/anime/test?anime_id={a['id']}","support":"Anime Supported"})
@@ -181,6 +166,27 @@ def search_anime_sama(queries, headers=None):
         with ThreadPoolExecutor(max_workers=10) as executor:
             list(executor.map(lambda r: check_link_support(r, headers), results))
     return results
+
+def _fetch_franime_catalogue(headers=None):
+    req_headers = {"User-Agent": "Mozilla/5.0"}
+    if headers and "User-Agent" in headers:
+        req_headers["User-Agent"] = headers["User-Agent"]
+    try:
+            r = requests.get(
+                "https://api.franime.fr/api/animes",
+                headers=req_headers,
+                timeout=60,
+    )
+            r.raise_for_status()    
+    
+            data = r.json()
+            return data
+    
+    except Exception as e: print(e); return []
+
+def texte(a):
+    parts = [a.get("title"), a.get("titleO")] + list((a.get("titles") or {}).values())
+    return " ".join(p for p in parts if isinstance(p, str)).lower()
 
 def _keywords(query):
     """The full query plus each keyword alone, so 'king raid' also finds "King's Raid"."""

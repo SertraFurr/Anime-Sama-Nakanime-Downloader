@@ -17,7 +17,7 @@ class SourceDomains:
         "uqload": ("Uqload", ["uqload.is", "uqload"]),
         "ansembed": ("AnsEmbed", ["ansembed.net"]),
         "voe": ("Voe", ["voe"]),
-        "filemoon": ("Filemoon", ["bysesukior.com", "filemoon"]),
+        "filemoon": ("Filemoon", ["bysesukior.com", "filemoon", "bysedikamoum.com"]),
         "luluvdo": ("LuluStream", ["luluvdo.com", "lulustream.com", "lulu"]),
         "vidzy": ("Vidzy", ["vidzy.live", "vidzy.org", "vidzy"]),
         "nakanime": ("Nakanime", ["nakanime.tv", "nakanime.fr", "nakanime"]),

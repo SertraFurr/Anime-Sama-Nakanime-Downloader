@@ -87,7 +87,7 @@ def fetch_video_source(url):
             return None
 
         # FILEMOON EXTRACTION
-        if 'bysesukior.com' in single_url or 'filemoon' in single_url:
+        if 'bysesukior.com' in single_url or 'filemoon' in single_url or 'bysedikamoum.com' in single_url:
             stream_url = extract_filemoon_video_source(single_url)
             if stream_url:
                 return stream_url

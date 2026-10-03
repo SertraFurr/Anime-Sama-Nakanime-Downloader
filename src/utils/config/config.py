@@ -85,7 +85,10 @@ def set_domain_cookies(domain, cf_clearance_value, user_agent_value):
         json.dump(config, f, indent=4)
 
 
-def check_domain_cookies(domain, headers):
+def check_domain_cookies(domain, headers, test_url=None, extra_headers=None):
+    """test_url: when the Cloudflare rule only covers part of the site (e.g.
+    franime's API), check against a URL under that rule instead of the home
+    page, which can answer 200 even with an expired cookie."""
     stored = get_domain_cookies(domain)
     if stored is False:
         return False
@@ -96,10 +99,11 @@ def check_domain_cookies(domain, headers):
         return False
 
     request_headers = headers.copy()
+    request_headers.update(extra_headers or {})
     request_headers['Cookie'] = f'cf_clearance={cf_clearance_value}'
 
     try:
-        req = requests.get(f"https://{domain}", headers=request_headers, timeout=10)
+        req = requests.get(test_url or f"https://{domain}", headers=request_headers, timeout=10)
         return req.status_code != 403
     except requests.RequestException:
         return False

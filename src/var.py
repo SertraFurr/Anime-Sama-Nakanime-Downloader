@@ -25,7 +25,7 @@ class SourceDomains:
         # rotating domain names that don't contain "vidhide" at all (e.g.
         # minochinos.com); identified by the "/vidhide/..." asset paths in
         # the embed page itself rather than the domain.
-        "vidhide": ("VidHide", ["minochinos.com", "vidhide"]),
+        "vidhide": ("VidHide", ["minochinos.com", "vidhide", "bingezove"]),
     }
 
     ONEUPLOAD = _SOURCES["oneupload"][1]

@@ -7,19 +7,31 @@ SITE_DISPLAY_NAMES = {"anime-sama": "Anime-Sama", "nakanime": "Nakanime", "frani
 
 def tutorial_input(domain=None):
     domain = domain or get_domain()
-    print_status("No valid Cloudflare cookies found. Let's set them up!", "info")
+    print_status("Cloudflare may require a cookie for this site. Setup is optional; press Enter to continue without one.", "info")
     print_status(f"1. Open {domain} in your browser.", "info")
     print_status("2. Press F12 to open Developer Tools.", "info")
     print_status(f"3. Go to the 'Application' tab → Cookies → select {domain}.", "info")
     print_status("4. Copy the value of the 'cf_clearance' cookie.", "info")
     cf_clearance = input("Paste the cf_clearance value here: ").strip().strip("'\"")
+    if not cf_clearance:
+        return None, None
 
     print_status("5. In DevTools Console (F12 → Console), run:", "info")
     print_status("   navigator.userAgent", "info")
     print_status("6. Copy the User-Agent string printed in console (with or without the quotes).", "info")
     user_agent = input("Paste the User-Agent here: ").strip().strip("'\"")
+    if not user_agent:
+        return None, None
 
     return cf_clearance, user_agent
+
+
+def wants_cloudflare_cookie(domain):
+    answer = input(f"Do you want to provide a Cloudflare cookie for {domain}? (y/N): ").strip().lower()
+    return answer in ("y", "yes")
+
+
+_cloudflare_skipped_domains = set()
 
 
 def ensure_domain_cookies(domain, test_url=None, extra_headers=None):
@@ -29,43 +41,67 @@ def ensure_domain_cookies(domain, test_url=None, extra_headers=None):
     stored under its own key so they never clash with each other. Interactive
     only (the fallback script must never hang on input() in the background -
     callers only invoke this when interactive)."""
+    if domain in _cloudflare_skipped_domains:
+        return
+
     stored = get_domain_cookies(domain)
     if stored:
         request_headers = {"User-Agent": stored[1]["User-Agent"]}
         if check_domain_cookies(domain, request_headers, test_url, extra_headers):
             return
+        set_domain_cookies(domain, "", "")
 
-    print_status(f"{domain} is behind Cloudflare too - needs its own cookie.", "info")
-    while True:
-        cf_clearance, user_agent = tutorial_input(domain=domain)
-        set_domain_cookies(domain, cf_clearance, user_agent)
-        if check_domain_cookies(domain, {"User-Agent": user_agent}, test_url, extra_headers):
-            print_status(f"{domain} cookies are valid.", "success")
-            return
-        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
-        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
+    print_status(f"{domain} may be behind Cloudflare.", "info")
+    if not wants_cloudflare_cookie(domain):
+        _cloudflare_skipped_domains.add(domain)
+        print_status(f"Continuing without Cloudflare cookies for {domain}. The site may still block requests.", "warning")
+        return
+
+    cf_clearance, user_agent = tutorial_input(domain=domain)
+    if not cf_clearance or not user_agent:
+        _cloudflare_skipped_domains.add(domain)
+        print_status(f"Continuing without Cloudflare cookies for {domain}. The site may still block requests.", "warning")
+        return
+
+    set_domain_cookies(domain, cf_clearance, user_agent)
+    if check_domain_cookies(domain, {"User-Agent": user_agent}, test_url, extra_headers):
+        print_status(f"{domain} cookies are valid.", "success")
+        return
+
+    set_domain_cookies(domain, "", "")
+    _cloudflare_skipped_domains.add(domain)
+    print_status(f"Could not validate {domain} cookies. Continuing without them; the site may still block requests.", "warning")
 
 print(f"Checking if cloudflare is enabled on {get_domain()}..")
 cloudflare = check_if_cloudflare_enabled(domain=get_domain(), headers={"User-Agent": "Mozilla/5.0"})
+headers = generate_requests_headers(None, "Mozilla/5.0")
 
 if cloudflare:
-    print("Cloudflare is enabled, either wait (Unknown time) or follow this:")
+    print("Cloudflare may be enabled. You can provide a cookie or continue without one.")
     cookies_info = get_cookies()
-    if cookies_info is False:
-        cf_clearance, user_agent = tutorial_input()
-        set_cookies(cf_clearance, user_agent)
-    cf_clearance, headers = get_cookies()
-    request_headers = {"User-Agent": headers.get("User-Agent")}
+    if cookies_info:
+        cf_clearance, stored_headers = cookies_info
+        user_agent = stored_headers.get("User-Agent")
+        if not check_cookies(domain=get_domain(), headers={"User-Agent": user_agent}):
+            set_cookies("", "")
+            cookies_info = False
 
-    while not check_cookies(domain=get_domain(), headers=request_headers):
-        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
-        cf_clearance, user_agent = tutorial_input()
-        set_cookies(cf_clearance, user_agent)
-
-    user_agent = headers.get("User-Agent")
-    headers = generate_requests_headers(cf_clearance, user_agent)
-else:
-    headers = generate_requests_headers("None", "Mozilla/5.0")
+    if not cookies_info:
+        if wants_cloudflare_cookie(get_domain()):
+            cf_clearance, user_agent = tutorial_input()
+            if cf_clearance and user_agent:
+                set_cookies(cf_clearance, user_agent)
+                if check_cookies(domain=get_domain(), headers={"User-Agent": user_agent}):
+                    headers = generate_requests_headers(cf_clearance, user_agent)
+                else:
+                    set_cookies("", "")
+                    print_status("Could not validate the Cloudflare cookie. Continuing without it; the site may still block requests.", "warning")
+            else:
+                print_status("Continuing without Cloudflare cookies. The site may still block requests.", "warning")
+        else:
+            print_status("Continuing without Cloudflare cookies. The site may still block requests.", "warning")
+    else:
+        headers = generate_requests_headers(cf_clearance, user_agent)
 
 # Same check for Nakanime, right alongside the main domain's - but only when
 # this is a bare, fully-interactive launch (no CLI args at all). fallback.py
